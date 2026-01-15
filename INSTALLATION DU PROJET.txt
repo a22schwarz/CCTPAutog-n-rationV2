@@ -1,0 +1,22 @@
+INSTALLATION DU PROJET
+
+1. Ouvrir le projet dans PyCharm
+   - Dézipper le dossier du projet
+   - Dans PyCharm : File -> Open -> sélectionner le dossier du projet
+
+2. Créer un environnement Python (Virtualenv)
+   - Aller dans File -> Settings-> Project -> Python Interpreter
+   - Cliquer sur AddInterpreter ->New Virtualenv Environment
+   - Si Python n’est pas installé, PyCharm proposera de le télécharger il faut cliquer sur accepter Sinon installer python 3 via le portail entreprise
+   - Si erreur relancer la commande dans un nouveau terminal
+   - Valider
+   - Dans terminal, mettre python --version pour vérifier la bonne installation
+
+3. Installer les bibliothèques nécessaires
+   - Dans PyCharm, ouvrir l’onglet Terminal (le rectangle avec le triangle et le trait à l'intérieur en bas à gauche de l’écran)
+   - Taper :pip install flask docxtpl pandas
+
+4. Lancer le programme
+   - Ouvrir le fichier app.py
+   - Cliquer sur le bouton vert en haut à droite (le petit triangle)
+   - Cliquer sur le lien http://127.0.0.1:5000

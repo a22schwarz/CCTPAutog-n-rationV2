@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Auto-générateur de CCTP – Virya Energy</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --orange: #ff5a37;
+      --green: #175649;
+      --text: #175649;
+      --text-light: #555;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Source Sans Pro', sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      color: var(--text);
+    }
+
+    #bg-video {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      z-index: -2;
+      filter: brightness(0.7) contrast(1.05);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(
+        rgba(0,0,0,0.35),
+        rgba(0,0,0,0.35)
+      );
+      z-index: -1;
+    }
+
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+    }
+
+    .hero-card {
+      position: relative;
+      background: rgba(255, 255, 255, 0.65);
+      border-radius: 16px;
+      padding: 42px 48px;
+      width: 100%;
+      max-width: 520px;
+      text-align: center;
+      border: 1px solid rgba(255,255,255,0.35);
+      box-shadow: 0 25px 50px rgba(0,0,0,0.25);
+    }
+
+    .logo {
+      width: 110px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 600;
+      color: var(--orange);
+      margin-bottom: 6px;
+    }
+
+    .subtitle {
+      font-size: 0.9rem;
+      color: var(--text-light);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 32px;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .file-info {
+      font-size: 0.85rem;
+      color: #666;
+      font-style: italic;
+    }
+
+    .btn {
+      display: inline-block;
+      min-width: 220px;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--orange);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    .btn:hover {
+      background: var(--green);
+      transform: translateY(-2px);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    @media (max-width: 600px) {
+      .hero-card {
+        padding: 32px 24px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <video id="bg-video" autoplay muted loop playsinline>
+    <source src="{{ url_for('static', filename='videos/bron_drone.mp4') }}" type="video/mp4">
+  </video>
+
+  <div class="hero">
+    <div class="hero-card">
+
+      <img
+        src="{{ url_for('static', filename='img/virya_logo.svg') }}"
+        alt="Logo Virya"
+        class="logo"
+      >
+
+      <h1>Importation du CSV</h1>
+
+      <form action="/form" method="post" enctype="multipart/form-data">
+        <input type="file" name="csv_file" id="csv_file" accept=".csv">
+
+        <div class="actions">
+          <label for="csv_file" class="btn">Choisir un CSV</label>
+          <span id="file-name" class="file-info">Aucun fichier sélectionné</span>
+          <button type="submit" class="btn">Charger le formulaire</button>
+        </div>
+      </form>
+
+    </div>
+  </div>
+
+  <script>
+    const inputFile = document.getElementById('csv_file');
+    const fileName = document.getElementById('file-name');
+
+    inputFile.addEventListener('change', () => {
+      fileName.textContent = inputFile.files.length
+        ? inputFile.files[0].name
+        : 'Aucun fichier sélectionné';
+    });
+  </script>
+
+</body>
+</html>

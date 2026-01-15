@@ -1,0 +1,2 @@
+1) .\venv\Scripts\Activate.ps1
+2) pip install Flask pandas python-docx docxtpl

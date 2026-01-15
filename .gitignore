@@ -1,0 +1,18 @@
+# Gros / inutile à versionner
+php/
+static/videos/
+flyctl_*/
+
+# Données perso
+*.csv
+*.xlsx
+
+# Temporaires / Windows
+*.tmp
+desktop.ini
+.idea/
+admin/database.db
+php/
+static/videos/
+flyctl_*/
+~$*.docx

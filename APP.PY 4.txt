@@ -1,0 +1,394 @@
+from flask import Flask, render_template, request, send_file
+from docxtpl import DocxTemplate
+from datetime import datetime
+import pandas as pd
+import re
+import json
+from io import BytesIO
+
+app = Flask(__name__)
+app.config.update(
+    TEMPLATE='TemplateCCTP.docx',
+    CSV_SEP=';',
+    MAX_ZONES=4
+)
+
+# ========= Alias CSV (AC & VT, + variations/typos) =========
+# On met des sous-chaînes en MINUSCULES qu'on cherchera "contains"
+FIELD_ALIASES = {
+    'nom_projet': [
+        'nom projet', 'nom du projet', 'projet'
+    ],
+    'type_installation': [
+        'nature de la centrale', 'type installation', 'type de centrale'
+    ],
+    'maitre_ouvrage': [
+        'nom client', 'maître d’ouvrage', 'maitre d’ouvrage', 'client'
+    ],
+    'ville': [
+        'localisation', 'ville'
+    ],
+    'adresse': [
+        'adresse', 'adresse du site'
+    ],
+    'puissance_kwc': [
+        'puissance de la centrale', 'puissance zone totale',
+        'puissance install', 'puissande l’install', 'puissande l\'install', 'puissance installée'
+    ],
+    'valorisation': [
+        "valorisation de l'énergie produite", 'mode de valorisation', 'valorisation'
+    ],
+}
+
+# ========= Catalogues =========
+INTEGRATIONS = {
+    'membrane': [
+        'EPC Solaire iNova PV Lite Tilt GC FE',
+        'SOPRASOLAR FIX EVO TILT',
+        'DOME SOLAR - ROOF SOLAR'
+    ],
+    'leste': [
+        'Novotegra toit plat III',
+        'ESDEC - FlatFix Wave'
+    ],
+    'bac acier': [
+        'DOME SOLAR - Helios B2',
+        'DOME SOLAR - Kogysun i+',
+        'DOME SOLAR - Fibro-Solar',
+        'DOME SOLAR - Ital-Solar',
+        'NOVOTEGRA - Minirails Paysage',
+        'JORISIDE - JoriSolar RS-EVO',
+        'JORISIDE - JoriSolar Opti Roof'
+    ],
+    'tuiles': ['NOVOTEGRA - Top-fix petits éléments'],
+    'ombriere': [
+        'JORISIDE RS PARK 2',
+        'ADIWATT - Profil Evolution',
+        'SPORASOLAR - PARK',
+        'DOME SOLAR - HELIOS RC3'
+    ]
+}
+PV_MODULES = {
+    'Jinko JKM450N-54HL4R': {},
+    'DGMEC PV Series': {},
+    'Voltec A126': {}
+}
+INVERTERS = {
+    'HUAWEI SUN2000-100 KTL-M2': {},
+    'HUAWEI SUN2000-215 KTL-H0': {},
+    'ENPHASE IQ8 AC-72-M-INT': {},
+    'SOLAREDGE 90K + OPTIMISEUR DE PUISSANCE SOLAREDGE S1000': {}
+}
+
+OMB_TYPES = [
+    "OMB VL DOUBLE", "OMB VL SIMPLE", "OMB VL PORTIQUE",
+    "OMB PL", "OMB BOIS VL SIMPLE", "OMB BOIS VL DOUBLE"
+]
+TOITURE_TYPES = [
+    "TT LESTE SUD", "TT LESTE E/W", "TT SOUDE", "TT BAC ACIER"
+]
+
+# ========= Helpers =========
+def parse_csv(src, from_text=False):
+    opts = dict(sep=app.config['CSV_SEP'], header=None, dtype=str,
+                keep_default_na=False, engine='python')
+    if from_text:
+        return pd.read_csv(BytesIO(src.encode()), **opts)
+    return pd.read_csv(src, **opts)
+
+def find_first(df, aliases):
+    """Retourne la 1ère valeur dont la cellule précédente 'contient' un alias (casefold/trim)."""
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    aliases = [a.strip().casefold() for a in aliases if a and a.strip()]
+    if not aliases or df.empty:
+        return ''
+    # on parcourt lignes, regarde paires (cell, cell+1)
+    for row in df.itertuples(index=False):
+        row_vals = [str(x).strip() for x in row]
+        # on cherche dans toutes les colonnes sauf la dernière,
+        # car on va prendre la "suivante" comme valeur
+        for i in range(len(row_vals) - 1):
+            a = row_vals[i].casefold()
+            b = row_vals[i+1]
+            if any(alias in a for alias in aliases):
+                return b.strip()
+    return ''
+
+def find_value(df, canonical_key):
+    """Utilise FIELD_ALIASES pour chercher la valeur d'un champ canonique."""
+    aliases = FIELD_ALIASES.get(canonical_key, [canonical_key])
+    return find_first(df, aliases)
+
+def extract_zone(df, n):
+    typ = find_first(df, [f"typologie zone {n}"])
+    if not typ:
+        return None
+    return {
+        'name': f'Zone {n}',
+        'type': find_first(df, [f"typologie zone {n}"]) or '',
+        'puissance': find_first(df, [f"puissance zone {n}"]) or '',
+        'modules': find_first(df, [f"nombre panneaux zone {n}", f"nb panneaux zone {n}"]) or ''
+    }
+
+def detect_zones(df):
+    if df.empty or df.shape[1] < 2:
+        return []
+    # détecte "Zone X" dans la 2e colonne (souvent le cas) – puis essaie d'extraire
+    nums = sorted({
+        int(m.group(1))
+        for cell in df.iloc[:, 1]
+        if (m := re.search(r'zone\s*(\d+)', str(cell), re.IGNORECASE))
+    })
+    zones = [extract_zone(df, n) for n in nums]
+    return [z for z in zones if z][:app.config['MAX_ZONES']]
+
+def pick_integration(typ):
+    t = (typ or '').lower()
+    if 'omb' in t:        return INTEGRATIONS['ombriere']
+    if 'tui' in t:        return INTEGRATIONS['tuiles']
+    if 'bac acier' in t:  return INTEGRATIONS['bac acier']
+    if 'leste' in t:      return INTEGRATIONS['leste']
+    if 'membrane' in t:   return INTEGRATIONS['membrane']
+    return []
+
+def get_voltage(bt_mt):
+    if bt_mt == "BT": return "400V"
+    if bt_mt == "MT": return "800V"
+    return "Non défini"
+
+def to_bool(form, key):
+    return form.get(key) == 'on'
+
+def compute_totals(zones):
+    total_puiss = 0.0
+    total_mod = 0
+    for z in zones:
+        p = (z.get('puissance') or '').replace(',', '.').strip()
+        if p and p != '-':
+            try:
+                total_puiss += float(p)
+            except ValueError:
+                pass
+        m = (z.get('modules') or '').strip()
+        if m and m != '-':
+            try:
+                total_mod += int(m)
+            except ValueError:
+                pass
+    return total_puiss, total_mod
+
+def load_table_json(form, name):
+    try:
+        return json.loads(form.get(name, '[]'))
+    except json.JSONDecodeError:
+        return []
+
+def sanitize_rows(rows):
+    for r in rows:
+        for k in ('type','desc','modules','orient','incli','hbp'):
+            r[k] = (r.get(k) or '').strip()
+    return rows
+
+# ========= Routes =========
+@app.route('/')
+def upload():
+    return render_template('upload.html')
+
+@app.route('/form', methods=['POST'])
+def form():
+    f = request.files.get('csv_file')
+    df = parse_csv(f) if f and f.filename.lower().endswith('.csv') else pd.DataFrame()
+
+    # Détecte zones depuis CSV (AC ou VT)
+    zones = detect_zones(df)
+
+    # Récupère les valeurs projet via ALIASES (robuste AC/VT)
+    csv_data = {key: find_value(df, key) for key in FIELD_ALIASES.keys()}
+
+    ctx = {
+        'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '',
+        'zones': zones,
+        'zones_json': json.dumps(zones),
+
+        'panel_options': list(PV_MODULES),
+        'inverter_options': list(INVERTERS),
+        'integration_options_per_zone': [pick_integration(z['type']) for z in zones],
+
+        'latitude': request.form.get('latitude', ''),
+        'longitude': request.form.get('longitude', ''),
+        'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
+        'bt_mt': request.form.get('bt_mt', 'BT'),
+
+        'ZONES': zones,
+        'NB_ZONES': len(zones),
+
+        # champs pour le .docx (RECOMMANDÉ : balises en minuscules côté docx)
+        **csv_data
+    }
+    return render_template('formulaire.html', **ctx)
+
+@app.route('/generate', methods=['POST'])
+def generate():
+    # Infos projet (priorité au formulaire, sinon CSV)
+    nom_projet = (request.form.get('nom_projet') or request.form.get('nom projet') or 'inconnu').strip()
+    ville      = (request.form.get('ville') or 'inconnue').strip()
+    adresse    = (request.form.get('adresse') or 'inconnue').strip()
+
+    zones = json.loads(request.form.get('zones_json', '[]'))
+
+    # Cases globales
+    Ombrieres          = to_bool(request.form, 'Ombrieres')
+    Hangars            = to_bool(request.form, 'Hangars')
+    travaux_rh         = to_bool(request.form, 'travaux_rh')
+    ouvrages_retention = to_bool(request.form, 'ouvrages_retention')
+
+    # Bridage dynamique (décorrélé du Webdyn)
+    bridage_dyn_enabled = to_bool(request.form, 'bridage_dyn')
+    bridage_dyn_value   = (request.form.get('bridage_dyn_value', '') or '').strip()
+
+    # Champs par zone (ensembles distincts)
+    liaison_terre_zones = {request.form.get(f'zone-{i}-liaison_terre', '') for i in range(len(zones))}
+    decouplage_zones    = {request.form.get(f'zone-{i}-decouplage', '') for i in range(len(zones))}
+
+    has_paratonnerre = any(f'zone-{i}-paratonnerre' in request.form for i in range(len(zones)))
+    has_sdis_or_icpe = any(
+        ('Préconisations SDIS' in request.form.getlist(f'zone-{i}-autres_specificites')) or
+        ('ICPE' in request.form.getlist(f'zone-{i}-typologie_batiment'))
+        for i in range(len(zones))
+    )
+
+    bt_mt = request.form.get('bt_mt', 'BT')
+    ctx = {
+        'nom_projet': nom_projet,
+        'ville': ville,
+        'adresse': adresse,
+        'date': datetime.today().strftime('%d/%m/%Y'),
+        'latitude': request.form.get('latitude', '').strip(),
+        'longitude': request.form.get('longitude', '').strip(),
+        'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
+        'VOTRE_TENSION': get_voltage(bt_mt),
+
+        'liaison_terre_zones': list(liaison_terre_zones),
+        'decouplage_zones': list(decouplage_zones),
+        'has_sdis_or_icpe': has_sdis_or_icpe,
+        'has_paratonnerre': has_paratonnerre,
+
+        'Ombrieres': Ombrieres,
+        'Hangars': Hangars,
+        'travaux_rh': travaux_rh,
+        'ouvrages_retention': ouvrages_retention,
+
+        'KEEP_LOT_BORNES': 'keep_lot_bornes' in request.form,
+        'KEEP_LOT_CHARPENTE': 'keep_lot_charpente' in request.form,
+        'KEEP_LOT_GROS_OEUVRE': 'keep_lot_gros_oeuvre' in request.form,
+        'KEEP_LOT_FONDATIONS_SPECIALES': 'keep_lot_fondations_speciales' in request.form,
+
+        # Bridage dynamique
+        'bridage_dynamique_enabled': bridage_dyn_enabled,
+        'bridage_dynamique_value': bridage_dyn_value,
+    }
+
+    # Hydrate chaque zone
+    for i, z in enumerate(zones):
+        z['mode_valorisation']     = request.form.getlist(f'zone-{i}-mode_valorisation')
+        z['typologie_batiment']    = request.form.getlist(f'zone-{i}-typologie_batiment')
+        z['referentiel_technique'] = request.form.getlist(f'zone-{i}-referentiel_technique')
+        z['autres_specificites']   = request.form.getlist(f'zone-{i}-autres_specificites')
+
+        z['mode_valorisation_display']     = ", ".join(z['mode_valorisation']) if z['mode_valorisation'] else "Non défini"
+        z['typologie_batiment_display']    = ", ".join(z['typologie_batiment']) if z['typologie_batiment'] else "Non défini"
+        z['referentiel_technique_display'] = ", ".join(z['referentiel_technique']) if z['referentiel_technique'] else "Non défini"
+        z['autres_specificites_display']   = ", ".join(z['autres_specificites']) if z['autres_specificites'] else "Non défini"
+
+        z['integration']  = request.form.get(f'zone-{i}-integration', 'Non défini')
+        z['module']       = request.form.get(f'zone-{i}-module', 'Non défini')
+        z['inverter']     = request.form.get(f'zone-{i}-inverter', 'Non défini')
+        z['coffret_dc']   = 'OUI' if request.form.get(f'zone-{i}-coffret_dc') else 'NON'
+        z['webdyn']       = (request.form.get(f'zone-{i}-webdyn', 'Aucun') or 'Aucun').strip()
+        z['paratonnerre'] = f'zone-{i}-paratonnerre' in request.form
+
+        # Bridage statique
+        z['bridage_enabled'] = (request.form.get(f'zone-{i}-bridage_enabled') is not None)
+        brid_val = (request.form.get(f'zone-{i}-bridage_value', '') or '').strip()
+        z['bridage_value'] = brid_val if (z['bridage_enabled'] and brid_val) else ''
+
+    # Synthèses
+    flat_types = [t for z in zones for t in (z.get('typologie_batiment') or []) if t]
+    type_installation = ', '.join(sorted(set(flat_types)))
+    has_ombrieres = any((z.get('type') or '') in OMB_TYPES for z in zones)
+    has_toiture   = any((z.get('type') or '') in TOITURE_TYPES for z in zones)
+    total_puiss, total_mod = compute_totals(zones)
+
+    ctx.update({
+        'ZONES': zones,
+        'NB_ZONES': len(zones),
+        'type_installation': type_installation,
+        'has_ombrieres': has_ombrieres,
+        'has_toiture': has_toiture,
+        'TOTAL_PUISSANCE': total_puiss,
+        'TOTAL_MODULES': total_mod,
+        'SELECTED_INTEGRATION': [z.get('integration','') for z in zones],
+        'SELECTED_MODULES': [z.get('module','') for z in zones],
+        'SELECTED_INV': [z.get('inverter','') for z in zones],
+        'AUTOCONSOMMATION': request.form.get('AC_VT', 'Vente Totale'),
+        'BT_MT': bt_mt,
+        'puissance_kwc': total_puiss
+    })
+
+    # Bridage statique — lignes + indicateur global
+    lines = []
+    for idx, z in enumerate(zones, 1):
+        if z.get('bridage_enabled'):
+            inv = (z.get('inverter') or '').strip() or z.get('name', f'Zone {idx}')
+            v = (z.get('bridage_value') or '').replace(',', '.').strip()
+            if v:
+                lines.append(f"- L’onduleur {inv} sera bridé à {v} kVA")
+            else:
+                lines.append(f"- L’onduleur {inv} fera l’objet d’un bridage statique (valeur à définir)")
+    has_bridage = any(z.get('bridage_enabled') for z in zones)
+    ctx.update({
+        'has_bridage': has_bridage,
+        'bridage_lines': lines,
+        'bridage_paragraph': "\n".join(lines)
+    })
+
+    # Supervision — on groupe les zones par choix
+    webdyn_simple, webdyn_bridage, coffret_suivi = [], [], []
+    for idx, z in enumerate(zones, 1):
+        choice = (z.get('webdyn') or 'Aucun').strip()
+        if choice == 'Webdyn simple':
+            webdyn_simple.append(f"Zone {idx}")
+        elif choice == 'Webdyn avec bridage dynamique':
+            webdyn_bridage.append(f"Zone {idx}")
+        elif choice == 'Coffret de supervision ELUM':
+            coffret_suivi.append(f"Zone {idx}")
+    ctx.update({
+        'webdyn_simple': webdyn_simple,         # listes (vides si rien)
+        'webdyn_bridage': webdyn_bridage,
+        'coffret_suivi': coffret_suivi
+    })
+
+    # Tables (ombrières / hangars)
+    OMB_TABLE  = sanitize_rows(load_table_json(request.form, 'omb_table'))
+    HANG_TABLE = sanitize_rows(load_table_json(request.form, 'hang_table'))
+    ctx.update({'OMB_TABLE': OMB_TABLE, 'HANG_TABLE': HANG_TABLE})
+
+    # Rendu Word
+    tpl = DocxTemplate(app.config['TEMPLATE'])
+    tpl.render(ctx)
+
+    buf = BytesIO()
+    tpl.save(buf)
+    buf.seek(0)
+
+    filename = f"CCTP_{ctx.get('nom_projet', 'projet')}.docx"
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+if __name__ == '__main__':
+    app.run(debug=True)

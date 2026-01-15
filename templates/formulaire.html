@@ -1,0 +1,857 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8"/>
+    <title>Générateur de CCTP – Formulaire</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap"
+          rel="stylesheet"/>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<video id="bg-video" autoplay muted loop>
+    <source src="{{ url_for('static', filename='videos/bron_drone.mp4') }}" type="video/mp4">
+</video>
+<div id="bg-overlay"></div>
+<main class="container">
+    <header>
+        <img src="{{ url_for('static', filename='img/virya_logo.svg') }}" alt="Logo Virya" class="logo"/>
+        <div>
+            <h1>Générateur de CCTP</h1>
+        </div>
+    </header>
+    <form method="POST" action="/generate" autocomplete="off" novalidate>
+        <textarea name="csv_text" hidden>{{ csv_text }}</textarea>
+        <input type="hidden" name="zones_json" value='{{ zones_json|safe }}'/>
+        <input type="hidden" name="type_installation_csv" value="{{ type_installation_csv|e }}"/>
+
+        <section class="card">
+            <h3>Informations générales</h3>
+            <div class="grid-3">
+                <div class="group">
+                    <label for="AC_VT">AC / VT</label>
+                    <select name="AC_VT" id="AC_VT">
+                        <option value="Autoconsommation" {% if AC_VT==
+                        'Autoconsommation' %}selected{% endif %}>Autoconsommation</option>
+                        <option value="Vente Totale" {% if AC_VT==
+                        'Vente Totale' %}selected{% endif %}>Vente Totale</option>
+                    </select>
+                </div>
+                <div class="group">
+                    <label for="bt_mt">BT / MT</label>
+                    <select name="bt_mt" id="bt_mt">
+                        <option value="BT" {% if bt_mt==
+                        'BT' %}selected{% endif %}>BT (Basse Tension)</option>
+                        <option value="MT" {% if bt_mt==
+                        'MT' %}selected{% endif %}>MT (Moyenne Tension)</option>
+                    </select>
+                </div>
+                <div class="group">
+                    <label for="implantation_globale">Implantation</label>
+                    <select name="implantation_globale" id="implantation_globale">
+                        <option value="">— Sélectionner —</option>
+                        <option value="en toiture" {% if implantation_globale==
+                        'en toiture' %}selected{% endif %}>en toiture</option>
+                        <option value="au sol" {% if implantation_globale==
+                        'au sol' %}selected{% endif %}>au sol</option>
+                        <option value="en ombrières" {% if implantation_globale==
+                        'en ombrières' %}selected{% endif %}>en ombrières</option>
+                        <option value="en toiture et au sol" {% if implantation_globale==
+                        'en toiture et au sol' %}selected{% endif %}>en toiture et au sol</option>
+                        <option value="en ombrières et au sol" {% if implantation_globale==
+                        'en ombrières et au sol' %}selected{% endif %}>en ombrières et au sol</option>
+                        <option value="en toiture et en ombrières" {% if implantation_globale==
+                        'en toiture et en ombrières' %}selected{% endif %}>en toiture et en ombrières</option>
+                        <option value="en toiture, en ombrières et au sol" {% if implantation_globale==
+                        'en toiture, en ombrières et au sol' %}selected{% endif %}>en toiture, en ombrières et au
+                        sol</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid-3">
+                <div class="group">
+                    <label for="nom_projet">Nom du projet</label>
+                    <input type="text" id="nom_projet" name="nom_projet" value="{{ nom_projet }}"/>
+                </div>
+                <div class="group">
+                    <label for="ville">Ville</label>
+                    <input type="text" id="ville" name="ville" value="{{ ville }}"/>
+                </div>
+                <div class="group">
+                    <label for="adresse">Adresse</label>
+                    <input type="text" id="adresse" name="adresse" value="{{ adresse }}"/>
+                </div>
+            </div>
+            </div>
+            <div class="grid-2">
+                <div class="group">
+                    <label for="latitude">Latitude</label>
+                    <input type="text" id="latitude" name="latitude" value="{{ latitude }}"/>
+                </div>
+                <div class="group">
+                    <label for="longitude">Longitude</label>
+                    <input type="text" id="longitude" name="longitude" value="{{ longitude }}"/>
+                </div>
+            </div>
+            <div class="grid-2">
+                <div class="group">
+                    <label for="deposecandelabres">Candélabres à déposer</label>
+                    <select id="deposecandelabres" name="deposecandelabres">
+                        <option value="0" {% if deposecandelabres==
+                        '0' %}selected{% endif %}>Non</option>
+                        <option value="1" {% if deposecandelabres==
+                        '1' %}selected{% endif %}>Oui</option>
+                    </select>
+                </div>
+                <div class="group">
+                    <label for="abattagearbres">Arbres à abattre</label>
+                    <select id="abattagearbres" name="abattagearbres">
+                        <option value="0" {% if abattagearbres==
+                        '0' %}selected{% endif %}>Non</option>
+                        <option value="1" {% if abattagearbres==
+                        '1' %}selected{% endif %}>Oui</option>
+                    </select>
+                </div>
+            </div>
+            </div>
+
+        </section>
+        <section class="card">
+            <h3>Paramètres par zone</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Paramètre</th>
+                        {% for z in zones %}
+                        <th>{{ z.name }}</th>
+                        {% endfor %}
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr>
+                        <th>Type</th>
+                        {% for z in zones %}
+                        <td>{{ z.type }}</td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Plots soudés (uniquement pour TT SOUDE)</th>
+                        {% for z in zones %}
+                        <td>
+                            {% if 'TT SOUDE' in z.type.upper() %}
+                            <label>
+                                <input type="checkbox" name="zone-{{ loop.index0 }}-plots_soudes"
+                                       {% if request.form.get('zone-' ~ loop.index0 ~ '-plots_soudes') %}checked{% endif
+                                %} />
+                                Oui
+                            </label>
+                            {% else %}
+                            <span style="color:#aaa;font-style:italic">N/A</span>
+                            {% endif %}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Puissance (kWc)</th>
+                        {% for z in zones %}
+                        <td>{{ z.puissance }}</td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Nb de panneaux</th>
+                        {% for z in zones %}
+                        <td>{{ z.modules }}</td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                    <tr>
+                        <th>Panneau</th>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <div class="group">
+                                <select name="zone-{{ i }}-module" class="module-select" data-index="{{ i }}">
+                                    <option value="">— Sélectionner —</option>
+                                    {% for opt in panel_options %}
+                                    <option value="{{ opt }}"
+                                            {% if request.form.get(
+                                    'zone-'~i~'-module') %}
+                                    {% if opt == request.form.get('zone-'~i~'-module') %}selected{% endif %}
+                                    {% elif default_module %}
+                                    {% if opt == default_module %}selected{% endif %}
+                                    {% endif %}
+                                    >{{ opt }}</option>
+                                    {% endfor %}
+                                    <option value="__manual__"
+                                            {% if request.form.get(
+                                    'zone-'~i~'-module') == '__manual__' %}selected{% endif %}>
+                                    Saisie manuelle
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="manual-panel-fields" id="manual-fields-{{ i }}" style="margin-top:10px">
+                                {% set mod = module_details[i] if module_details and module_details|length > i else {}
+                                %}
+                                <div class="group"><label>Marque</label><input type="text"
+                                                                               name="zone-{{ i }}-module-marque"
+                                                                               value="{{ mod.get('Marque PV','') }}"/>
+                                </div>
+                                <div class="group"><label>Référence</label><input type="text"
+                                                                                  name="zone-{{ i }}-module-ref"
+                                                                                  value="{{ mod.get('Ref PV','') }}"/>
+                                </div>
+                                <div class="group"><label>Puissance (Wc)</label><input type="text"
+                                                                                       name="zone-{{ i }}-module-puissance"
+                                                                                       value="{{ mod.get('Puissance Wc','') }}"/>
+                                </div>
+                                <div class="group"><label>Type</label><input type="text" name="zone-{{ i }}-module-type"
+                                                                             value="{{ mod.get('Type','') }}"/></div>
+                                <div class="group"><label>Cadre</label><input type="text"
+                                                                              name="zone-{{ i }}-module-cadre"
+                                                                              value="{{ mod.get('Cadre','') }}"/></div>
+                                <div class="group"><label>Backsheet</label><input type="text"
+                                                                                  name="zone-{{ i }}-module-backsheet"
+                                                                                  value="{{ mod.get('Backsheet','') }}"/>
+                                </div>
+                                <div class="group"><label>Poids (kg)</label><input type="text"
+                                                                                   name="zone-{{ i }}-module-poids"
+                                                                                   value="{{ mod.get('Poids kg','') }}"/>
+                                </div>
+                                <div class="group"><label>Dimensions (mm)</label><input type="text"
+                                                                                        name="zone-{{ i }}-module-dimensions"
+                                                                                        value="{{ mod.get('Dimensions mm','') }}"/>
+                                </div>
+                                <div class="group"><label>Longueur câble (mm)</label><input type="text"
+                                                                                            name="zone-{{ i }}-module-cable"
+                                                                                            value="{{ mod.get('Longueur câble mm','') }}"/>
+                                </div>
+
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Onduleur</th>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <div class="group">
+                                <select name="zone-{{ i }}-inverter" class="inverter-select" data-index="{{ i }}">
+                                    <option value="">— Sélectionner —</option>
+                                    {% for opt in inverter_options %}
+                                    <option value="{{ opt }}"
+                                            {% if opt== request.form.get(
+                                    'zone-'~i~'-inverter') %}selected{% endif %}>{{ opt }}</option>
+                                    {% endfor %}
+                                    <option value="__manual__" {% if request.form.get(
+                                    'zone-'~i~'-inverter') == '__manual__' %}selected{% endif %}>
+                                    Saisie manuelle
+                                    </option>
+                                </select>
+                            </div>
+                            {% set inv = inverter_details[i] if inverter_details and inverter_details|length > i else {}
+                            %}
+                            <div class="manual-inverter-field" id="manual-inverter-{{ i }}" style="margin-top:10px">
+                                <div class="group"><label>Marque</label><input type="text"
+                                                                               name="zone-{{ i }}-inverter-marque"
+                                                                               value="{{ inv.get('Marque','') }}"/>
+                                </div>
+                                <div class="group"><label>Référence</label><input type="text"
+                                                                                  name="zone-{{ i }}-inverter-ref"
+                                                                                  value="{{ inv.get('Référence','') }}"/>
+                                </div>
+                                <div class="group"><label>Puissance apparente AC (kVA)</label><input type="text"
+                                                                                                     name="zone-{{ i }}-inverter-puissance"
+                                                                                                     value="{{ inv.get('Puissance kVA','') }}"/>
+                                </div>
+                                <div class="group"><label>Type</label><input type="text"
+                                                                             name="zone-{{ i }}-inverter-type"
+                                                                             value="{{ inv.get('Type','') }}"/></div>
+                                <div class="group"><label>Tension nominale (V)</label><input type="text"
+                                                                                             name="zone-{{ i }}-inverter-tension"
+                                                                                             value="{{ inv.get('Tension nominale','') }}"/>
+                                </div>
+                                <div class="group"><label>Type de tension</label><input type="text"
+                                                                                        name="zone-{{ i }}-inverter-type-tension"
+                                                                                        value="{{ inv.get('Type tension','') }}"/>
+                                </div>
+                                <div class="group"><label>Raccordement DC</label><input type="text"
+                                                                                        name="zone-{{ i }}-inverter-raccord"
+                                                                                        value="{{ inv.get('Raccordement DC','') }}"/>
+                                </div>
+                                <div class="group"><label>Parafoudre DC</label><input type="text"
+                                                                                      name="zone-{{ i }}-inverter-para-dc"
+                                                                                      value="{{ inv.get('Parafoudre DC','') }}"/>
+                                </div>
+                                <div class="group"><label>Parafoudre AC</label><input type="text"
+                                                                                      name="zone-{{ i }}-inverter-para-ac"
+                                                                                      value="{{ inv.get('Parafoudre AC','') }}"/>
+                                </div>
+                                <div class="group"><label>Détection d’arc DC (AFCI)</label><input type="text"
+                                                                                                  name="zone-{{ i }}-inverter-afci"
+                                                                                                  value="{{ inv.get('AFCI','') }}"/>
+                                </div>
+                                <div class="group"><label>Garantie produit</label><input type="text"
+                                                                                         name="zone-{{ i }}-inverter-garantie"
+                                                                                         value="{{ inv.get('Garantie','') }}"/>
+                                </div>
+                                <div class="group"><label>Extension de garantie</label><input type="text"
+                                                                                              name="zone-{{ i }}-inverter-ext-garantie"
+                                                                                              value="{{ inv.get('Extension garantie','') }}"/>
+                                </div>
+                            </div>
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Système d’intégration (SI)</th>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <div class="group">
+                                <select name="zone-{{ i }}-si" class="si-select" data-index="{{ i }}">
+                                    <option value="">— Sélectionner —</option>
+                                    {% for opt in si_options %}
+                                    <option value="{{ opt }}"
+                                            {% if request.form.get(
+                                    'zone-'~i~'-si') == opt %}selected{% endif %}
+                                    >{{ opt }}</option>
+                                    {% endfor %}
+                                    <option value="__manual__"
+                                            {% if request.form.get(
+                                    'zone-'~i~'-si') == '__manual__' %}selected{% endif %}
+                                    >Saisie manuelle</option>
+                                </select>
+                            </div>
+                            <div class="manual-si-fields" id="manual-si-{{ i }}" style="margin-top:10px">
+                           <div class="group">
+    <label>Marque</label>
+    <input type="text" name="zone-{{ i }}-si-marque" value="{{ si_details[i].get('Marque','') }}"/>
+</div>
+
+<div class="group">
+    <label>Référence</label>
+    <input type="text" name="zone-{{ i }}-si-ref" value="{{ si_details[i].get('Référence','') }}"/>
+</div>
+
+<div class="group">
+    <label>Fixation</label>
+    <input type="text" name="zone-{{ i }}-si-fixation" value="{{ si_details[i].get('Fixation','') }}"/>
+</div>
+                                <div class="group">
+    <label>Compatibilités</label>
+        <input type="text" name="zone-{{ i }}-si-Compat1" value="{{ si_details[i]['Compat1'] }}">
+        <input type="text" name="zone-{{ i }}-si-Compat2" value="{{ si_details[i]['Compat2'] }}">
+        <input type="text" name="zone-{{ i }}-si-Compat3" value="{{ si_details[i]['Compat3'] }}">
+        <input type="text" name="zone-{{ i }}-si-Compat4" value="{{ si_details[i]['Compat4'] }}">
+        <input type="text" name="zone-{{ i }}-si-Compat5" value="{{ si_details[i]['Compat5'] }}">
+</div>
+<div class="group">
+    <label>Caractéristiques</label>
+        <input type="text" name="zone-{{ i }}-si-carac1" value="{{ si_details[i]['carac1'] }}">
+        <input type="text" name="zone-{{ i }}-si-carac2" value="{{ si_details[i]['carac2'] }}">
+        <input type="text" name="zone-{{ i }}-si-carac3" value="{{ si_details[i]['carac3'] }}">
+        <input type="text" name="zone-{{ i }}-si-carac4" value="{{ si_details[i]['carac4'] }}">
+        <input type="text" name="zone-{{ i }}-si-carac5" value="{{ si_details[i]['carac5'] }}">
+</div>
+<div class="group">
+    <label>Certification</label>
+    <input type="text" name="zone-{{ i }}-si-certification" value="{{ si_details[i].get('Certification','') }}"</input>
+</div>
+
+<div class="group">
+    <label>Garantie</label>
+    <input type="text" name="zone-{{ i }}-si-garantie" value="{{ si_details[i].get('Garantie','') }}"/>
+</div>
+
+                            </div>
+                        </td>
+                        {% endfor %}
+                    </tr>
+
+                    <tr>
+                        <th>Bridage statique</th>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <label><input type="checkbox" name="zone-{{ i }}-bridage_enabled" {% if request.form.get('zone-'~i~'-bridage_enabled')
+                                %}checked{% endif %} /> Oui</label>
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Valeur du bridage (kVA)</th>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <div class="group">
+                                <input type="text" name="zone-{{ i }}-bridage_value"
+                                       value="{{ request.form.get('zone-'~i~'-bridage_value','') }}"/>
+                        </td>
+                        {% endfor %}
+            </div>
+            </tr>
+            <tr>
+                <th>Bridage dynamique (global)</th>
+                <td colspan="{{ zones|length }}">
+                    <label><input type="checkbox" name="bridage_dyn" {% if request.form.get('bridage_dyn') %}checked{%
+                        endif %} /> Oui</label>
+                </td>
+            </tr>
+            <tr>
+                <th>Coffret DC</th>
+                {% for i in range(zones|length) %}
+                <td><label><input type="checkbox" name="zone-{{ i }}-coffretDC" {% if request.form.get('zone-'~i~'-coffretDC')
+                    %}checked{% endif %} /> Oui</label></td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Supervision / Webdyn</th>
+                {% for i in range(zones|length) %}
+                <div class="group">
+                    <td>
+                        <div class="group">
+                            <select name="zone-{{ i }}-webdyn">
+                                {% set cur = request.form.get('zone-'~i~'-webdyn','Aucun') %}
+                                {% for val in ['Aucun','Webdyn simple','Webdyn avec bridage dynamique','Coffret de
+                                supervision ELUM'] %}
+                                <option value="{{ val }}" {% if cur==val %}selected{% endif %}>{{ val }}</option>
+                                {% endfor %}
+                            </select></div>
+                    </td>
+                </div>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Paratonnerre</th>
+                {% for i in range(zones|length) %}
+                <td><label><input type="checkbox" name="zone-{{ i }}-paratonnerre" {% if request.form.get('zone-'~i~'-paratonnerre')
+                    %}checked{% endif %} /> Oui</label></td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Schéma de liaison à la terre</th>
+                {% for i in range(zones|length) %}
+                <td>
+                    <div class="group">
+                        <select name="zone-{{ i }}-liaison_terre">
+                            {% for val in ['IT','TT','TNC','TNS','TNCS'] %}
+                            <option value="{{ val }}">{{ val }}</option>
+                            {% endfor %}
+                        </select></div>
+                </td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Type de découplage</th>
+                {% for i in range(zones|length) %}
+                <td>
+                    <div class="group">
+                        <select name="zone-{{ i }}-decouplage">
+                            <option value="ajout_relais">AC - Ajout d'un relais de découplage</option>
+                            <option value="modification_relais">AC - Modification de la programmation du relais</option>
+                            <option value="ajout_cellule_comptage">AC - Ajout d'une cellule de comptage</option>
+                            <option value="Cellule_dans_HTA">VT - Cellule prévue dans le poste HTA</option>
+                            <option value="Découplage assuré par les onduleurs"> AC - VT - Découplage assuré par les
+                                onduleurs
+                            </option>
+                        </select></div>
+                </td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Mode de valorisation</th>
+                {% for i in range(zones|length) %}
+                <td style="text-align:left">
+                    {% for val,label in [('S21','S21'),('AO CRE','AO CRE (Période de
+                    candidature)'),('Agrégateur','Agrégateur'),('Sans revente','Sans revente')] %}
+                    <label style="display:block; font-weight:normal"><input type="checkbox"
+                                                                            name="zone-{{ i }}-mode_valorisation"
+                                                                            value="{{ val }}" {% if val in
+                                                                            request.form.getlist('zone-'~i~'-mode_valorisation')
+                        %}checked{% endif %} /> {{ label }}</label>
+                    {% endfor %}
+                </td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Typologie du bâtiment</th>
+                {% for i in range(zones|length) %}
+                <td style="text-align:left">
+                    {% for opt in ['ICPE','ERP','ERT'] %}
+                    <label style="display:block; font-weight:normal"><input type="checkbox"
+                                                                            name="zone-{{ i }}-typologie_batiment"
+                                                                            value="{{ opt }}" {% if opt in
+                                                                            request.form.getlist('zone-'~i~'-typologie_batiment')
+                        %}checked{% endif %} /> {{ opt }}</label>
+                    {% endfor %}
+                </td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Référentiel technique</th>
+                {% for i in range(zones|length) %}
+                <td style="text-align:left">
+                    {% for opt in ['FM Global','APSAD D20','Avis technique','ETN'] %}
+                    <label style="display:block; font-weight:normal"><input type="checkbox"
+                                                                            name="zone-{{ i }}-referentiel_technique"
+                                                                            value="{{ opt }}" {% if opt in
+                                                                            request.form.getlist('zone-'~i~'-referentiel_technique')
+                        %}checked{% endif %} /> {{ opt }}</label>
+                    {% endfor %}
+                </td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <th>Autres spécificités</th>
+                {% for i in range(zones|length) %}
+                <td style="text-align:left">
+                    {% for opt in ['ABF','Aéroport','PPRI','Préconisations SDIS'] %}
+                    <label style="display:block; font-weight:normal"><input type="checkbox"
+                                                                            name="zone-{{ i }}-autres_specificites"
+                                                                            value="{{ opt }}" {% if opt in
+                                                                            request.form.getlist('zone-'~i~'-autres_specificites')
+                        %}checked{% endif %} /> {{ opt }}</label>
+                    {% endfor %}
+                </td>
+                {% endfor %}
+            </tr>
+            </tbody>
+            </table>
+            </div>
+        </section>
+        <section class="card">
+            <h3>Lots à inclure</h3>
+            <div class="grid-2">
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_hta" {% if 'keep_lot_hta' in request.form %}checked{% endif %}
+                    />
+                    HTA
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher si la puissance totale de l’installation dépasse 250 kVA.">i</span>
+                </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_fondations_speciales" {% if 'keep_lot_fondations_speciales' in
+                    request.form %}checked{% endif %} />
+                    Fondations spéciales
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher si le projet est une centrale avec des ombrières ou un hangar .">i</span>
+                </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_gros_oeuvre" {% if 'keep_lot_gros_oeuvre' in request.form
+                    %}checked{% endif %} />
+                    Gros œuvre
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher si le projet prévoit des ombrières ou un hangar">i</span>
+                </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_charpente" id="lot-charpente" {% if 'keep_lot_charpente' in
+                    request.form %}checked{% endif %} />
+                    Charpente
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher si le projet prévoit des ombrières ou un hangar">i</span>
+                </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_bornes" {% if 'keep_lot_bornes' in request.form %}checked{%
+                    endif %} />
+                    Bornes de recharge
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher uniquement si le projet inclut des bornes de recharge pour véhicules électriques (IRVE).">i</span>
+                </label>
+            </div>
+        </section>
+
+
+        {% set charpente_on = ('keep_lot_charpente' in request.form) %}
+        <section class="card" id="charpente-block" style="display:{{ 'block' if charpente_on else 'none' }};">
+            <h3>Lot Charpente — Ombrières et Hangars</h3>
+            <div class="group">
+                <label><input type="checkbox" name="Ombrieres" id="cb-ombrieres" checked/> Présence d’Ombrières</label>
+            </div>
+            <div class="editor" id="ombrieres-editor">
+                <div class="actions">
+                    <button type="button" class="btn" data-add="omb">Ajouter une ligne</button>
+                    <button type="button" class="btn btn-ghost" data-clear="omb">Vider</button>
+                </div>
+                <table>
+                    <thead>
+                    <tr>
+                        <th class="col-idx">#</th>
+                        <th>Description</th>
+                        <th>Nb modules en largeur</th>
+                        <th>Orientation</th>
+                        <th>Inclinaison (°)</th>
+                        <th>Hauteur bas de pente</th>
+                        <th style="width:1%"></th>
+                    </tr>
+                    </thead>
+                    <tbody id="omb-body"></tbody>
+                </table>
+                <input type="hidden" name="omb_table" id="omb_table"/>
+            </div>
+            <div class="group" style="margin-top:1rem">
+                <label><input type="checkbox" name="Hangars" id="cb-hangars" checked/> Présence de Hangars</label>
+            </div>
+            <div class="editor" id="hangars-editor">
+                <div class="actions">
+                    <button type="button" class="btn" data-add="hang">Ajouter une ligne</button>
+                    <button type="button" class="btn btn-ghost" data-clear="hang">Vider</button>
+                </div>
+                <table>
+                    <thead>
+                    <tr>
+                        <th class="col-idx">#</th>
+                        <th>Description</th>
+                        <th>Nb modules en largeur</th>
+                        <th>Orientation</th>
+                        <th>Inclinaison (°)</th>
+                        <th>Hauteur bas de pente</th>
+                        <th style="width:1%"></th>
+                    </tr>
+                    </thead>
+                    <tbody id="hang-body"></tbody>
+                </table>
+                <input type="hidden" name="hang_table" id="hang_table"/>
+            </div>
+        </section>
+        <section class="card">
+            <h3>VRD — réseaux humides</h3>
+            <div class="grid-2">
+                <label class="chip"><input type="checkbox" name="travaux_rh" {% if 'travaux_rh' in request.form
+                    %}checked{% endif %} /> Travaux réseaux humides</label>
+                <label class="chip"><input type="checkbox" name="ouvrages_retention" {% if 'ouvrages_retention' in
+                    request.form %}checked{% endif %} /> Ouvrages de rétention des eaux pluviales</label>
+            </div>
+        </section>
+        <div style="text-align:center; margin:22px 0 10px">
+            <button type="submit" class="btn">Générer le CCTP</button>
+        </div>
+    </form>
+</main>
+
+<script>
+    const lotCharpente = document.getElementById('lot-charpente');   // case "Charpente"
+    const charpenteBlk = document.getElementById('charpente-block'); // section complète
+    function syncCharpenteVis(){ charpenteBlk.style.display = lotCharpente.checked ? 'block' : 'none'; }
+    lotCharpente?.addEventListener('change', syncCharpenteVis);
+    syncCharpenteVis(); // état initial au chargement
+    function buildDynamicTable(cfg){
+      // Références DOM
+      const body   = document.getElementById(cfg.bodyId);
+      const addBtn = document.querySelector(`[data-add="${cfg.key}"]`);
+      const clrBtn = document.querySelector(`[data-clear="${cfg.key}"]`);
+      const sec    = document.getElementById(cfg.sectionId);
+      const toggle = document.getElementById(cfg.toggleId);
+      const hidden = document.getElementById(cfg.hiddenId);
+      function renumber(){
+        [...body.querySelectorAll('tr')].forEach((tr,i)=>{
+          const n = tr.querySelector('.col-idx'); if(n) n.textContent = i + 1;
+        });
+      }
+      function addRow(data){
+        const d = Object.assign({desc:'', modules:'6', orient:'Portrait', incli:'10', hbp:'3.5m'}, data||{});
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="col-idx"></td>
+          <td><input type="text" placeholder="Description" value="${d.desc}"/></td>
+          <td>
+            <select>
+              ${[2,3,4,5,6,7,8,9,10,11,12].map(n=>`<option ${String(n)===String(d.modules)?'selected':''}>${n}</option>`).join('')}
+            </select>
+          </td>
+          <td>
+            <select>
+              <option ${d.orient==='Portrait'?'selected':''}>Portrait</option>
+              <option ${d.orient==='Paysage'?'selected':''}>Paysage</option>
+            </select>
+          </td>
+          <td><input type="number" step="0.5" min="0" max="60" value="${d.incli}"/></td>
+          <td><input type="text" placeholder="ex: 3.5m" value="${d.hbp}"/></td>
+          <td style="text-align:right"><button type="button" class="btn btn-ghost btn-del">Suppr</button></td>
+        `;
+        body.appendChild(tr); renumber();
+      }
+      addBtn?.addEventListener('click',()=>addRow());
+      clrBtn?.addEventListener('click',()=>{ body.innerHTML=''; renumber(); });
+      body?.addEventListener('click', (e)=>{
+        if(e.target.closest('.btn-del')){ e.target.closest('tr').remove(); renumber(); }
+      });
+      addRow();
+      function syncLocal(){ if(sec && toggle){ sec.style.display = toggle.checked ? '' : 'none'; } }
+      toggle?.addEventListener('change', syncLocal); syncLocal();
+      (document.querySelector('form[action="/generate"]') || document.querySelector('form'))
+        ?.addEventListener('submit', ()=>{
+          const rows = [...body.querySelectorAll('tr')].map(tr=>{
+            const idx = tr.querySelector('.col-idx')?.textContent.trim() || '';
+            const inputs = tr.querySelectorAll('td select, td input');
+            const [desc, modules, orient, incli, hbp] = [...inputs].map(i=>i.value.trim());
+            return { type: idx, desc, modules, orient, incli, hbp };
+          }).filter(r => r.desc || r.modules || r.orient || r.incli || r.hbp);
+          hidden.value = JSON.stringify(rows);
+        });
+    }
+    buildDynamicTable({
+      key:'omb', bodyId:'omb-body', sectionId:'ombrieres-editor', toggleId:'cb-ombrieres', hiddenId:'omb_table'
+    });
+    buildDynamicTable({
+      key:'hang', bodyId:'hang-body', sectionId:'hangars-editor', toggleId:'cb-hangars', hiddenId:'hang_table'
+    });
+</script>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+
+      const PANEL_DB = {{ panel_db|tojson|safe }};
+      const INVERTER_DB = {{ inverter_db|tojson|safe }};
+
+      // PANNEAUX
+      document.querySelectorAll('.module-select').forEach(sel => {
+        const i = sel.dataset.index;
+        const fields = document.getElementById(`manual-fields-${i}`);
+
+        function updateFieldsFromDB(val) {
+          const data = PANEL_DB[val];
+          if (!data) return;
+          const map = {
+            'marque': 'Marque PV',
+            'ref': 'Ref PV',
+            'puissance': 'Puissance Wc',
+            'type': 'Type',
+            'cadre': 'Cadre',
+            'backsheet': 'Backsheet',
+            'poids': 'Poids kg',
+            'dimensions': 'Dimensions mm',
+            'cable': 'Longueur câble mm',
+            'certif': 'Certif carbone'
+          };
+          for (const [suffix, col] of Object.entries(map)) {
+            const input = document.querySelector(`[name="zone-${i}-module-${suffix}"]`);
+            if (input && data[col] !== undefined) input.value = data[col];
+          }
+        }
+
+        function toggleManual() {
+          fields.style.display = 'block'; // Toujours visible
+          const val = sel.value;
+          if (val && val !== '__manual__') updateFieldsFromDB(val);
+        }
+
+        sel.addEventListener('change', toggleManual);
+        toggleManual(); // état initial
+      });
+
+      // ONDULEURS
+      document.querySelectorAll('.inverter-select').forEach(sel => {
+        const i = sel.dataset.index;
+        const fields = document.getElementById(`manual-inverter-${i}`);
+
+        function updateFieldsFromDB(val) {
+          const data = INVERTER_DB[val];
+          if (!data) return;
+          const map = {
+            'marque': 'Marque',
+            'ref': 'Référence',
+            'puissance': 'Puissance kVA',
+            'type': 'Type',
+            'tension': 'Tension nominale',
+            'type-tension': 'Type tension',
+            'raccord': 'Raccordement DC',
+            'para-dc': 'Parafoudre DC',
+            'para-ac': 'Parafoudre AC',
+            'afci': 'AFCI',
+            'garantie': 'Garantie',
+            'ext-garantie': 'Extension garantie'
+          };
+          for (const [suffix, col] of Object.entries(map)) {
+            const input = document.querySelector(`[name="zone-${i}-inverter-${suffix}"]`);
+            if (input && data[col] !== undefined) input.value = data[col];
+          }
+        }
+
+        function toggleManual() {
+          fields.style.display = 'block'; // Toujours visible
+          const val = sel.value;
+          if (val && val !== '__manual__') updateFieldsFromDB(val);
+        }
+
+        sel.addEventListener('change', toggleManual);
+        toggleManual(); // état initial
+      });
+
+    });
+document.addEventListener('DOMContentLoaded', function () {
+  const SI_DB = {{ si_db|tojson|safe }};
+
+  document.querySelectorAll('.si-select').forEach(sel => {
+    const i = sel.dataset.index;
+    const fields = document.getElementById(`manual-si-${i}`);
+
+    function fillFromDB(label) {
+      if (!label || label === '__manual__') return;
+
+      // 1) Essai direct : la clé du dict est déjà "Marque - Référence"
+      let data = SI_DB[label];
+
+      // 2) Si jamais ça ne matche pas, fallback sur Marque + Référence trim
+      if (!data) {
+        const parts = label.split(' - ');
+        const marque = (parts[0] || '').trim();
+        const ref    = (parts[1] || '').trim();
+
+        for (const [key, obj] of Object.entries(SI_DB)) {
+          const m = (obj.Marque || '').trim();
+          const r = (obj["Référence"] || '').trim();
+          if (m === marque && r === ref) {
+            data = obj;
+            break;
+          }
+        }
+      }
+
+      if (!data) {
+        console.warn('SI non trouvé dans SI_DB pour', label);
+        return;
+      }
+
+      const map = {
+        'marque': 'Marque',
+        'ref': 'Référence',
+        'fixation': 'Fixation',
+        'carac1': 'Caractéristique 1',
+        'carac2': 'Caractéristique 2',
+        'carac3': 'Caractéristique 3',
+        'carac4': 'Caractéristique 4',
+        'carac5': 'Caractéristique 5',
+        'Compat1': 'Compatibilité 1',
+        'Compat2': 'Compatibilité 2',
+        'Compat3': 'Compatibilité 3',
+        'Compat4': 'Compatibilité 4',
+        'Compat5': 'Compatibilité 5',
+        'certification': 'Certification',
+        'garantie': 'Garantie'
+      };
+
+      for (const [suffix, col] of Object.entries(map)) {
+        const inp = document.querySelector(`[name="zone-${i}-si-${suffix}"]`);
+        if (!inp) continue;
+        if (data[col] !== undefined) {
+          inp.value = data[col] || '';
+        }
+      }
+    }
+
+    function onChange() {
+      if (fields) fields.style.display = 'block';  // toujours visible
+      fillFromDB(sel.value);
+    }
+
+    sel.addEventListener('change', onChange);
+
+    // État initial (si un SI est déjà sélectionné au chargement)
+    onChange();
+  });
+});
+
+</script>
+
+
+</body>
+</html>
