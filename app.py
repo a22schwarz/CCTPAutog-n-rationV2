@@ -249,6 +249,8 @@ def get_si_from_db(marque, ref):
         conn.close()
         return None
 
+
+
     data = dict(row)
 
     data["carac1"] = row["carac1"] or ""
