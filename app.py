@@ -76,9 +76,16 @@ def _sb_delete(table, filters):
     if not USE_SUPABASE:
         return []
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    resp = requests.delete(url, headers=_sb_headers(), params=filters, timeout=10)
+    headers = _sb_headers()
+    headers["Prefer"] = "return=representation"
+    resp = requests.delete(url, headers=headers, params=filters, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    if not resp.text:
+        return []
+    try:
+        return resp.json()
+    except ValueError:
+        return {"raw": resp.text}
 
 def _sb_upload_image(file_storage, folder):
     if not USE_SUPABASE:
