@@ -1,0 +1,84 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<h1>Onduleurs</h1>
+
+<section class="card">
+  <h2>{{ "Modifier" if current else "Ajouter" }} un onduleur</h2>
+  <form method="post" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="id" value="{{ current.get('id','') if current else '' }}">
+
+    <div class="field"><label>Nom complet</label><input name="nom_complet" value="{{ current.get('nom_complet','') if current else '' }}"></div>
+    <div class="field"><label>Marque</label><input name="marque" value="{{ current.get('marque','') if current else '' }}"></div>
+    <div class="field"><label>Reference</label><input name="reference" value="{{ current.get('reference','') if current else '' }}"></div>
+    <div class="field"><label>Puissance kVA</label><input name="puissance_kva" value="{{ current.get('puissance_kva','') if current else '' }}"></div>
+    <div class="field"><label>Type</label><input name="type" value="{{ current.get('type','') if current else '' }}"></div>
+    <div class="field"><label>Tension nominale</label><input name="tension_nominale" value="{{ current.get('tension_nominale','') if current else '' }}"></div>
+    <div class="field"><label>Type tension</label><input name="type_tension" value="{{ current.get('type_tension','') if current else '' }}"></div>
+    <div class="field"><label>Raccordement DC</label><input name="raccordement_dc" value="{{ current.get('raccordement_dc','') if current else '' }}"></div>
+    <div class="field"><label>Parafoudre DC</label><input name="para_dc" value="{{ current.get('para_dc','') if current else '' }}"></div>
+    <div class="field"><label>Parafoudre AC</label><input name="para_ac" value="{{ current.get('para_ac','') if current else '' }}"></div>
+    <div class="field"><label>AFCI</label><input name="afci" value="{{ current.get('afci','') if current else '' }}"></div>
+    <div class="field"><label>Garantie</label><input name="garantie" value="{{ current.get('garantie','') if current else '' }}"></div>
+    <div class="field"><label>Extension garantie</label><input name="extension_garantie" value="{{ current.get('extension_garantie','') if current else '' }}"></div>
+
+    <div class="field span-2">
+      <label>Image</label>
+      <input type="file" name="image" accept="image/*">
+      {% if current and current.get('image') %}
+        <div class="preview">
+          <img src="{{ current.get('image')|img_url('onduleurs') }}" alt="onduleur">
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="actions span-2">
+      <button type="submit" class="btn">{{ "Mettre a jour" if current else "Ajouter" }}</button>
+      {% if current %}
+        <a class="btn ghost" href="{{ url_for('admin_onduleurs') }}">Annuler</a>
+      {% endif %}
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Liste des onduleurs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Nom complet</th>
+          <th>Marque</th>
+          <th>Reference</th>
+          <th>kVA</th>
+          <th>Image</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.get('id') }}</td>
+            <td>{{ row.get('nom_complet') }}</td>
+            <td>{{ row.get('marque') }}</td>
+            <td>{{ row.get('reference') }}</td>
+            <td>{{ row.get('puissance_kva') }}</td>
+            <td>
+              {% if row.get('image') %}
+                <img src="{{ row.get('image')|img_url('onduleurs') }}" alt="onduleur">
+              {% endif %}
+            </td>
+            <td class="actions-cell">
+              <a class="btn ghost" href="{{ url_for('admin_onduleurs', edit=row.get('id')) }}">Modifier</a>
+              <form method="post" action="{{ url_for('admin_onduleurs_delete', onduleur_id=row.get('id')) }}" onsubmit="return confirm('Supprimer ?');">
+                <button type="submit" class="btn danger">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -4,14 +4,35 @@ import socket
 import subprocess
 import webbrowser
 import time
+import shutil
 
-DB_PATH = "database.db"
+BASE_DIR = os.path.dirname(__file__)
+
+def _resolve_db_path(path):
+    if os.path.isabs(path):
+        return path
+    return os.path.join(BASE_DIR, path)
+
+DB_PATH = _resolve_db_path(os.environ.get("DB_PATH", "database.db"))
 
 # Localisation de PHP portable
-BASE_DIR = os.path.dirname(__file__)
-PHP_EXE = os.path.join(BASE_DIR, "php", "php.exe")
 ADMIN_DIR = os.path.join(BASE_DIR, "admin")
-ADMIN_URL = "http://localhost:8000/admin/index.php"
+ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8000"))
+ADMIN_URL = os.environ.get("ADMIN_URL") or f"http://localhost:{ADMIN_PORT}/admin/index.php"
+
+def _find_php_exe():
+    env_path = os.environ.get("PHP_EXE")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    local_path = os.path.join(BASE_DIR, "php", "php.exe")
+    if os.path.exists(local_path):
+        return local_path
+    return shutil.which("php")
+
+def _is_port_open(host, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex((host, port)) == 0
 
 
 def column_exists(cur, table, column):
@@ -121,38 +142,47 @@ def upgrade_integrations_caracteristiques(cur):
 
 #  Lancement de l’interface PHP
 
-def start_admin_interface():
-    print("\n--- Lancement de l’interface admin SQLite ---")
+def start_admin_interface(open_browser=True):
+    print("\n--- Lancement de l'interface admin SQLite ---")
 
-    if not os.path.exists(PHP_EXE):
-        print("❌ ERREUR : php.exe introuvable !")
-        return
+    if _is_port_open("127.0.0.1", ADMIN_PORT):
+        print(f" Admin server already running: {ADMIN_URL}")
+        if open_browser:
+            webbrowser.open(ADMIN_URL)
+        return False
+
+    php_exe = _find_php_exe()
+    if not php_exe:
+        print("ERROR: php.exe not found.")
+        return False
 
     subprocess.Popen(
-        [PHP_EXE, "-S", "localhost:8000"],
-        cwd=os.path.dirname(__file__),
+        [php_exe, "-S", f"localhost:{ADMIN_PORT}"],
+        cwd=BASE_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=True
     )
 
     time.sleep(1)
-    print(" Serveur PHP lancé : http://localhost:8000")
-    webbrowser.open(ADMIN_URL)
+    print(f" PHP server started: http://localhost:{ADMIN_PORT}")
+    if open_browser:
+        webbrowser.open(ADMIN_URL)
+    return True
 
 
 #  Routine INITIALE
-def init_db():
-    print("\n--- Initialisation / Mise à jour de la base SQLite ---")
+def ensure_db():
+    print("\n--- Initialisation / Mise a jour de la base SQLite ---")
 
     new_file = not os.path.exists(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
     if new_file:
-        print("→ Création de database.db…")
+        print("-> Creation de database.db...")
     else:
-        print(" Base existante détectée : mise à niveau…")
+        print(" Base existante detectee : mise a niveau...")
 
     upgrade_modules(cur)
     upgrade_onduleurs(cur)
@@ -162,8 +192,12 @@ def init_db():
     conn.commit()
     conn.close()
 
-    print(" Base SQLite prête.\n")
-    start_admin_interface()
+    print(" Base SQLite prete.\n")
+
+def init_db(start_admin=True, open_browser=True):
+    ensure_db()
+    if start_admin:
+        start_admin_interface(open_browser=open_browser)
 
 
 if __name__ == "__main__":

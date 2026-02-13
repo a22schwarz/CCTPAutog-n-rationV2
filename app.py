@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, send_file, url_for  # On importe Flask : (routes / pages / formulaires)
+from flask import Flask, render_template, request, send_file, url_for, redirect  # On importe Flask : (routes / pages / formulaires)
 from docxtpl import DocxTemplate  # permet de remplir le modèle word avec les variables du contexte
 from datetime import datetime  # pour la date
 import pandas as pd  # poru lire le CSV
@@ -7,12 +7,132 @@ import re, \
     json  # re pour simplifier la recherche dans le CSV et json  pour gérer le format json (utile pour les tableaux avec des valeurs différentes selon la zone)
 from io import BytesIO  # le tampon mémoire qui sert à générer le .docx sans avoir à créer un fichier dans le dur
 import os
+import uuid
+from urllib.parse import quote
+from urllib.request import urlopen
+
+import requests
+from werkzeug.utils import secure_filename
+
+BASE_DIR = os.path.dirname(__file__)
 DB_PATH = os.environ.get("DB_PATH", "database.db")
+if not os.path.isabs(DB_PATH):
+    DB_PATH = os.path.join(BASE_DIR, DB_PATH)
+os.environ["DB_PATH"] = DB_PATH
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cctp-images")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError(
+        "Supabase est obligatoire. Definir SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY dans l'environnement."
+    )
+USE_SUPABASE = True
+
+ADMIN_URL = os.environ.get("ADMIN_URL", "/admin")
+
+# Supabase uniquement: pas d'initialisation SQLite.
+
+def _sb_headers():
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+
+def _sb_select(table, filters=None, order=None):
+    if not USE_SUPABASE:
+        return []
+    params = {}
+    if filters:
+        params.update(filters)
+    if order:
+        params["order"] = order
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    resp = requests.get(url, headers=_sb_headers(), params=params, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def _sb_insert(table, data):
+    if not USE_SUPABASE:
+        return []
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = _sb_headers()
+    headers["Prefer"] = "return=representation"
+    resp = requests.post(url, headers=headers, json=data, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def _sb_update(table, filters, data):
+    if not USE_SUPABASE:
+        return []
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = _sb_headers()
+    headers["Prefer"] = "return=representation"
+    resp = requests.patch(url, headers=headers, params=filters, json=data, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def _sb_delete(table, filters):
+    if not USE_SUPABASE:
+        return []
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    resp = requests.delete(url, headers=_sb_headers(), params=filters, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+def _sb_upload_image(file_storage, folder):
+    if not USE_SUPABASE:
+        return ""
+    if not file_storage or not file_storage.filename:
+        return ""
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        return ""
+    ext = os.path.splitext(filename)[1].lower()
+    name = f"{uuid.uuid4().hex}{ext}"
+    path = f"{folder}/{name}"
+    encoded_path = quote(path, safe="/")
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{encoded_path}"
+    headers = _sb_headers()
+    headers["Content-Type"] = file_storage.mimetype or "application/octet-stream"
+    headers["x-upsert"] = "true"
+    resp = requests.post(url, headers=headers, data=file_storage.read(), timeout=15)
+    resp.raise_for_status()
+    return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_BUCKET}/{encoded_path}"
+
+def _local_upload_image(file_storage, folder):
+    if not file_storage or not file_storage.filename:
+        return ""
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        return ""
+    ext = os.path.splitext(filename)[1].lower()
+    name = f"{uuid.uuid4().hex}{ext}"
+    upload_dir = os.path.join(BASE_DIR, "static", folder)
+    os.makedirs(upload_dir, exist_ok=True)
+    dst = os.path.join(upload_dir, name)
+    file_storage.save(dst)
+    return name
+
+def save_image(file_storage, folder):
+    return _sb_upload_image(file_storage, folder)
 
 
 app = Flask(__name__)  # création de l'app Flask
 app.config.update(TEMPLATE='TemplateCCTP.docx', CSV_SEP=';',
                   MAX_ZONES=4)  # on configure le nom du template word à remplir, ce qui sépare les infos du csv (en l'occurence un ;) et le nombre de zones max (car 4 zones possibles en VT)
+
+@app.context_processor
+def inject_admin_url():
+    return {"admin_url": ADMIN_URL}
+
+@app.template_filter("img_url")
+def img_url(value, folder):
+    if not value:
+        return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    return url_for("static", filename=f"{folder}/{value}")
 
 # Il se trouve que les infos dans le csv AC et VT ont des noms différents donc on crée un dicitionnaire d'alias pour les données qu'on va chercher l'ensemble des dénominations trouvables dans les 2 types de CSV.
 FIELD_ALIASES = {
@@ -52,9 +172,44 @@ def query(sql, params=()): #Exécute une requête SQL et renvoie le résultat so
     conn.close()
     return [dict(r) for r in rows]
 
+def execute_sql(sql, params=()):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    conn.commit()
+    last_id = cur.lastrowid
+    conn.close()
+    return last_id
+
+def _sqlite_insert(table, data):
+    cols = ", ".join(data.keys())
+    placeholders = ", ".join(["?"] * len(data))
+    sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
+    return execute_sql(sql, list(data.values()))
+
+def _sqlite_update(table, data, row_id):
+    set_clause = ", ".join([f"{k}=?" for k in data.keys()])
+    sql = f"UPDATE {table} SET {set_clause} WHERE id=?"
+    execute_sql(sql, list(data.values()) + [row_id])
+
+def _sqlite_delete(table, row_id):
+    execute_sql(f"DELETE FROM {table} WHERE id=?", (row_id,))
+
+def _admin_list(table):
+    if USE_SUPABASE:
+        return _sb_select(table, order="id.desc")
+    return query(f"SELECT * FROM {table} ORDER BY id DESC")
+
+def _admin_get(table, row_id):
+    if USE_SUPABASE:
+        rows = _sb_select(table, filters={"id": f"eq.{row_id}"})
+        return rows[0] if rows else None
+    rows = query(f"SELECT * FROM {table} WHERE id = ?", (row_id,))
+    return rows[0] if rows else None
+
 
 def load_module_df():
-    rows = query("SELECT * FROM modules")
+    rows = _sb_select("modules", order="id.desc") if USE_SUPABASE else query("SELECT * FROM modules")
     if not rows:
         return pd.DataFrame(columns=[
             "Marque PV", "Ref PV", "Nom complet", "Puissance Wc", "Type",
@@ -81,7 +236,7 @@ def load_module_df():
 
 
 def load_inverter_df():
-    rows = query("SELECT * FROM onduleurs")
+    rows = _sb_select("onduleurs", order="id.desc") if USE_SUPABASE else query("SELECT * FROM onduleurs")
     if not rows:
         return pd.DataFrame(columns=[
             "Nom complet", "Marque", "Référence", "Puissance kVA",
@@ -109,7 +264,7 @@ def load_inverter_df():
 
 
 def load_si_df():
-    rows = query("SELECT * FROM integrations")
+    rows = _sb_select("integrations", order="id.desc") if USE_SUPABASE else query("SELECT * FROM integrations")
     if not rows:
         return pd.DataFrame(columns=[
             "Marque", "Référence", "Fixation", "Compatibilité 1", "Compatibilité 2", "Compatibilité 3", "Compatibilité 4", "Compatibilité 5",
@@ -118,23 +273,29 @@ def load_si_df():
         ])
 
     df = pd.DataFrame(rows)
+    def _col(name):
+        if name in df.columns:
+            return name
+        lower = name.lower()
+        return lower if lower in df.columns else name
+
     df = df.rename(columns={
-        "marque": "Marque",
-        "ref": "Référence",
-        "fixation": "Fixation",
-        "Compat1": "Compatibilité 1",
-        "Compat2": "Compatibilité 2",
-        "Compat3": "Compatibilité 3",
-        "Compat4": "Compatibilité 4",
-        "Compat5": "Compatibilité 5",
-        "carac1": "Caractéristique 1",
-        "carac2": "Caractéristique 2",
-        "carac3": "Caractéristique 3",
-        "carac4": "Caractéristique 4",
-        "carac5": "Caractéristique 5",
-        "image": "Image",
-        "certification": "Certification",
-        "garantie": "Garantie",
+        _col("marque"): "Marque",
+        _col("ref"): "Référence",
+        _col("fixation"): "Fixation",
+        _col("Compat1"): "Compatibilité 1",
+        _col("Compat2"): "Compatibilité 2",
+        _col("Compat3"): "Compatibilité 3",
+        _col("Compat4"): "Compatibilité 4",
+        _col("Compat5"): "Compatibilité 5",
+        _col("carac1"): "Caractéristique 1",
+        _col("carac2"): "Caractéristique 2",
+        _col("carac3"): "Caractéristique 3",
+        _col("carac4"): "Caractéristique 4",
+        _col("carac5"): "Caractéristique 5",
+        _col("image"): "Image",
+        _col("certification"): "Certification",
+        _col("garantie"): "Garantie",
     })
 
     return df.fillna('')
@@ -234,6 +395,46 @@ def get_si_from_db(marque, ref):
     marque = (marque or "").strip().upper()
     ref = (ref or "").strip().upper()
 
+    def _normalize(row_dict):
+        return {
+            "Marque": row_dict.get("marque") or row_dict.get("Marque") or "",
+            "Référence": row_dict.get("ref") or row_dict.get("Référence") or "",
+            "Fixation": row_dict.get("fixation") or row_dict.get("Fixation") or "",
+            "Compat1": row_dict.get("Compat1") or row_dict.get("compat1") or "",
+            "Compat2": row_dict.get("Compat2") or row_dict.get("compat2") or "",
+            "Compat3": row_dict.get("Compat3") or row_dict.get("compat3") or "",
+            "Compat4": row_dict.get("Compat4") or row_dict.get("compat4") or "",
+            "Compat5": row_dict.get("Compat5") or row_dict.get("compat5") or "",
+            "carac1": row_dict.get("carac1") or "",
+            "carac2": row_dict.get("carac2") or "",
+            "carac3": row_dict.get("carac3") or "",
+            "carac4": row_dict.get("carac4") or "",
+            "carac5": row_dict.get("carac5") or "",
+            "Certification": row_dict.get("certification") or row_dict.get("Certification") or "",
+            "Garantie": row_dict.get("garantie") or row_dict.get("Garantie") or "",
+            "Image": row_dict.get("image") or row_dict.get("Image") or "",
+            "principales_caracteristiques": row_dict.get("principales_caracteristiques") or "",
+        }
+
+    if USE_SUPABASE:
+        rows = _sb_select("integrations")
+        row = next(
+            (r for r in rows
+             if (r.get("marque") or "").strip().upper() == marque
+             and (r.get("ref") or "").strip().upper() == ref),
+            None,
+        )
+        if not row:
+            return None
+        data = _normalize(row)
+        carac_rows = _sb_select(
+            "integrations_caracteristiques",
+            filters={"integration_id": f"eq.{row.get('id')}"},
+        )
+        caracs = [r.get("texte", "") for r in carac_rows if r.get("texte")]
+        data["Caractéristiques"] = "\n".join(caracs) if caracs else data.get("principales_caracteristiques", "")
+        return data
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -249,15 +450,7 @@ def get_si_from_db(marque, ref):
         conn.close()
         return None
 
-
-
-    data = dict(row)
-
-    data["carac1"] = row["carac1"] or ""
-    data["carac2"] = row["carac2"] or ""
-    data["carac3"] = row["carac3"] or ""
-    data["carac4"] = row["carac4"] or ""
-    data["carac5"] = row["carac5"] or ""
+    data = _normalize(dict(row))
 
     # 2) Récupération des caractéristiques détaillées
     cur.execute("""
@@ -414,37 +607,15 @@ def form():
     csv_data['deposecandelabres'] = '1' if nb_cand > 0 else '0'
     csv_data['abattagearbres'] = '1' if nb_arb > 0 else '0'
 
-    ctx = {
-        # Construit le contexte envoyé au template formulaire.html ; il préremplit l’interface et transporte les données jusqu’à generate pour produire le Word
-        'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '',
-        # Version texte du CSV (séparateur ;)
-        'zones': zones,
-        # Liste des zones détectées plus haut; utilisée pour afficher une colonne par zone dans la table de paramètres
-        'zones_json': json.dumps(zones),
-        # Sérialisation JSON ; pour que generate relise exactement les mêmes zones sans devoir relire le CSV
-        'panel_options': list(PV_MODULES),
-        # panneaux proposés dans les listes déroulantes ; le choix final remontera dans z['module'] et sera réutilisé dans le word
-        'inverter_options': list(INVERTERS),  # Pareil
-        'si_options': list(SI_OPTIONS),
-        # Pour chaque zoneon propose la liste de SI correspondant grâce à la liste établie dans INTEGRATIONS
-        'latitude': request.form.get('latitude', ''),  # on demande de remplir la latitude
-        'longitude': request.form.get('longitude', ''),  # Pareil
-        'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
-        # Choix “Autoconsommation / Vente Totale”  et repris generate pour alimenter les balises word
-        'bt_mt': request.form.get('bt_mt', 'BT'),
-        # Choix BT/MT; repris par generate pour labalise VOTRE_TENSION dans le document word et les balises if bt_mt == "MT" dans 9.3.2.	Fourniture et pose TBGT
-        'ZONES': zones,  # Permet au word d'utiliser zones en majuscules
-        'NB_ZONES': len(zones),
-        # Nombre total de zones utile dans le word pour afficher un bloc seulement s’il y a au moins une zone
-        'default_module': module_info.get('Nom complet', '') if module_info else '',
-        'module_details': module_info or {},
-
-        **csv_data
-        # ajoute dans le contexte toutes les infos projet extraites du CSV via les alias (ex. nom_projet, ville, adresse, puissance_kwc) ; chaque clé correspond directement à une balise du modèle Word pour être remplacée automatiquement
-    }
-
-    ctx['implantation_globale'] = implantation_val  # valeur mappée pour sélection par défaut
-    ctx['type_installation_csv'] = ti_val  # stocke la valeur brute du CSV (pour usage ultérieur)
+    ctx = {'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '', 'zones': zones,
+           'admin_url': ADMIN_URL,
+           'zones_json': json.dumps(zones), 'panel_options': list(PV_MODULES), 'inverter_options': list(INVERTERS),
+           'si_options': list(SI_OPTIONS), 'latitude': request.form.get('latitude', ''),
+           'longitude': request.form.get('longitude', ''), 'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
+           'bt_mt': request.form.get('bt_mt', 'BT'), 'ZONES': zones, 'NB_ZONES': len(zones),
+           'default_module': module_info.get('Nom complet', '') if module_info else '',
+           'module_details': module_info or {}, **csv_data, 'implantation_globale': implantation_val,
+           'type_installation_csv': ti_val}
 
     module_details = []
     inverter_details = []
@@ -500,7 +671,10 @@ def form():
         # Ajout du chemin image si dispo
         if si_row and si_row.get("Image"):
             img_name = si_row["Image"].strip()
-            si_details[-1]["IMAGE_URL"] = url_for('static', filename=f"si/{img_name}")
+            if img_name.startswith("http://") or img_name.startswith("https://"):
+                si_details[-1]["IMAGE_URL"] = img_name
+            else:
+                si_details[-1]["IMAGE_URL"] = url_for('static', filename=f"si/{img_name}")
         else:
             si_details[-1]["IMAGE_URL"] = ""
 
@@ -541,6 +715,7 @@ def form():
     return render_template('formulaire.html', **ctx)
 
 
+# noinspection PyUnusedImports
 @app.route('/generate', methods=['POST'])  # Génaration du document Word à partir des données du formulaire
 def generate():
     g = request.form.get  # On crée un alias pour simplifier l'accès aux données du formulaire
@@ -830,6 +1005,15 @@ def generate():
             print("AUCUNE image définie pour ce SI")
             si["PHOTO"] = ""
             continue
+        if img_name.startswith("http://") or img_name.startswith("https://"):
+            try:
+                with urlopen(img_name) as resp:
+                    si["PHOTO"] = InlineImage(tpl, BytesIO(resp.read()), width=Cm(5))
+                print("✔ Image URL chargée !")
+            except Exception:
+                print("✘ Image URL introuvable :", img_name)
+                si["PHOTO"] = ""
+            continue
 
         path = os.path.join("static", "si", img_name)
         print("Chemin testé :", path)
@@ -873,6 +1057,213 @@ def generate():
         mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         # Type MIME pour un fichier Word
     )
+
+# --- Admin (Flask) ---
+def _get_integration_caracs(integration_id):
+    if USE_SUPABASE:
+        rows = _sb_select(
+            "integrations_caracteristiques",
+            filters={"integration_id": f"eq.{integration_id}"},
+            order="id.asc",
+        )
+        return [r.get("texte", "") for r in rows if r.get("texte")]
+    rows = query(
+        "SELECT texte FROM integrations_caracteristiques WHERE integration_id = ? ORDER BY id ASC",
+        (integration_id,),
+    )
+    return [r.get("texte", "") for r in rows if r.get("texte")]
+
+def _set_integration_caracs(integration_id, lines):
+    if USE_SUPABASE:
+        _sb_delete("integrations_caracteristiques", {"integration_id": f"eq.{integration_id}"})
+        payload = [{"integration_id": integration_id, "texte": t} for t in lines]
+        if payload:
+            _sb_insert("integrations_caracteristiques", payload)
+        return
+    execute_sql("DELETE FROM integrations_caracteristiques WHERE integration_id = ?", (integration_id,))
+    for t in lines:
+        execute_sql(
+            "INSERT INTO integrations_caracteristiques (integration_id, texte) VALUES (?, ?)",
+            (integration_id, t),
+        )
+
+@app.route("/admin")
+def admin_index():
+    return render_template("admin/index.html")
+
+@app.route("/admin/modules", methods=["GET", "POST"])
+def admin_modules():
+    edit_id = request.args.get("edit")
+    current = _admin_get("modules", edit_id) if edit_id else None
+    if request.method == "POST":
+        row_id = request.form.get("id")
+        existing = _admin_get("modules", row_id) if row_id else None
+        data = {
+            "marque": request.form.get("marque", ""),
+            "reference": request.form.get("reference", ""),
+            "nom_complet": request.form.get("nom_complet", ""),
+            "puissance_wc": request.form.get("puissance_wc", ""),
+            "type": request.form.get("type", ""),
+            "cadre": request.form.get("cadre", ""),
+            "backsheet": request.form.get("backsheet", ""),
+            "dimensions": request.form.get("dimensions", ""),
+            "longueur_cable": request.form.get("longueur_cable", ""),
+            "poids": request.form.get("poids", ""),
+            "garantie": request.form.get("garantie", ""),
+            "certif_carbone": request.form.get("certif_carbone", ""),
+            "etn": request.form.get("etn", ""),
+        }
+        image_url = save_image(request.files.get("image"), "modules")
+        if row_id:
+            if image_url:
+                data["image"] = image_url
+            elif existing and existing.get("image"):
+                data["image"] = existing.get("image")
+            if USE_SUPABASE:
+                _sb_update("modules", {"id": f"eq.{row_id}"}, data)
+            else:
+                _sqlite_update("modules", data, row_id)
+        else:
+            if image_url:
+                data["image"] = image_url
+            if USE_SUPABASE:
+                _sb_insert("modules", data)
+            else:
+                _sqlite_insert("modules", data)
+        return redirect(url_for("admin_modules"))
+
+    rows = _admin_list("modules")
+    return render_template("admin/modules.html", rows=rows, current=current)
+
+@app.route("/admin/modules/<int:module_id>/delete", methods=["POST"])
+def admin_modules_delete(module_id):
+    if USE_SUPABASE:
+        _sb_delete("modules", {"id": f"eq.{module_id}"})
+    else:
+        _sqlite_delete("modules", module_id)
+    return redirect(url_for("admin_modules"))
+
+@app.route("/admin/onduleurs", methods=["GET", "POST"])
+def admin_onduleurs():
+    edit_id = request.args.get("edit")
+    current = _admin_get("onduleurs", edit_id) if edit_id else None
+    if request.method == "POST":
+        row_id = request.form.get("id")
+        existing = _admin_get("onduleurs", row_id) if row_id else None
+        data = {
+            "nom_complet": request.form.get("nom_complet", ""),
+            "marque": request.form.get("marque", ""),
+            "reference": request.form.get("reference", ""),
+            "puissance_kva": request.form.get("puissance_kva", ""),
+            "type": request.form.get("type", ""),
+            "tension_nominale": request.form.get("tension_nominale", ""),
+            "type_tension": request.form.get("type_tension", ""),
+            "raccordement_dc": request.form.get("raccordement_dc", ""),
+            "para_dc": request.form.get("para_dc", ""),
+            "para_ac": request.form.get("para_ac", ""),
+            "afci": request.form.get("afci", ""),
+            "garantie": request.form.get("garantie", ""),
+            "extension_garantie": request.form.get("extension_garantie", ""),
+        }
+        image_url = save_image(request.files.get("image"), "onduleurs")
+        if row_id:
+            if image_url:
+                data["image"] = image_url
+            elif existing and existing.get("image"):
+                data["image"] = existing.get("image")
+            if USE_SUPABASE:
+                _sb_update("onduleurs", {"id": f"eq.{row_id}"}, data)
+            else:
+                _sqlite_update("onduleurs", data, row_id)
+        else:
+            if image_url:
+                data["image"] = image_url
+            if USE_SUPABASE:
+                _sb_insert("onduleurs", data)
+            else:
+                _sqlite_insert("onduleurs", data)
+        return redirect(url_for("admin_onduleurs"))
+
+    rows = _admin_list("onduleurs")
+    return render_template("admin/onduleurs.html", rows=rows, current=current)
+
+@app.route("/admin/onduleurs/<int:onduleur_id>/delete", methods=["POST"])
+def admin_onduleurs_delete(onduleur_id):
+    if USE_SUPABASE:
+        _sb_delete("onduleurs", {"id": f"eq.{onduleur_id}"})
+    else:
+        _sqlite_delete("onduleurs", onduleur_id)
+    return redirect(url_for("admin_onduleurs"))
+
+@app.route("/admin/integrations", methods=["GET", "POST"])
+def admin_integrations():
+    edit_id = request.args.get("edit")
+    current = _admin_get("integrations", edit_id) if edit_id else None
+    caracs_text = "\n".join(_get_integration_caracs(edit_id)) if edit_id else ""
+    if request.method == "POST":
+        row_id = request.form.get("id")
+        existing = _admin_get("integrations", row_id) if row_id else None
+        data = {
+            "marque": request.form.get("marque", ""),
+            "ref": request.form.get("ref", ""),
+            "fixation": request.form.get("fixation", ""),
+            "compat1": request.form.get("compat1", ""),
+            "compat2": request.form.get("compat2", ""),
+            "compat3": request.form.get("compat3", ""),
+            "compat4": request.form.get("compat4", ""),
+            "compat5": request.form.get("compat5", ""),
+            "carac1": request.form.get("carac1", ""),
+            "carac2": request.form.get("carac2", ""),
+            "carac3": request.form.get("carac3", ""),
+            "carac4": request.form.get("carac4", ""),
+            "carac5": request.form.get("carac5", ""),
+            "certification": request.form.get("certification", ""),
+            "garantie": request.form.get("garantie", ""),
+        }
+        image_url = save_image(request.files.get("image"), "si")
+        if row_id:
+            if image_url:
+                data["image"] = image_url
+            elif existing and existing.get("image"):
+                data["image"] = existing.get("image")
+            if USE_SUPABASE:
+                _sb_update("integrations", {"id": f"eq.{row_id}"}, data)
+            else:
+                _sqlite_update("integrations", data, row_id)
+            integration_id = row_id
+        else:
+            if image_url:
+                data["image"] = image_url
+            if USE_SUPABASE:
+                inserted = _sb_insert("integrations", data)
+                integration_id = inserted[0]["id"] if inserted else None
+            else:
+                integration_id = _sqlite_insert("integrations", data)
+
+        caracs_raw = request.form.get("caracs", "")
+        lines = [line.strip() for line in caracs_raw.splitlines() if line.strip()]
+        if integration_id:
+            _set_integration_caracs(integration_id, lines)
+
+        return redirect(url_for("admin_integrations"))
+
+    rows = _admin_list("integrations")
+    return render_template(
+        "admin/integrations.html",
+        rows=rows,
+        current=current,
+        caracs_text=caracs_text,
+    )
+
+@app.route("/admin/integrations/<int:integration_id>/delete", methods=["POST"])
+def admin_integrations_delete(integration_id):
+    if USE_SUPABASE:
+        _sb_delete("integrations_caracteristiques", {"integration_id": f"eq.{integration_id}"})
+        _sb_delete("integrations", {"id": f"eq.{integration_id}"})
+    else:
+        execute_sql("DELETE FROM integrations_caracteristiques WHERE integration_id = ?", (integration_id,))
+        _sqlite_delete("integrations", integration_id)
+    return redirect(url_for("admin_integrations"))
 
 # Point d’entrée : “python app.py” lance un petit serveur web en local (debug = True)
 if __name__ == '__main__':

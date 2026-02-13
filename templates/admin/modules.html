@@ -1,0 +1,84 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<h1>Modules PV</h1>
+
+<section class="card">
+  <h2>{{ "Modifier" if current else "Ajouter" }} un module</h2>
+  <form method="post" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="id" value="{{ current.get('id','') if current else '' }}">
+
+    <div class="field"><label>Marque</label><input name="marque" value="{{ current.get('marque','') if current else '' }}"></div>
+    <div class="field"><label>Reference</label><input name="reference" value="{{ current.get('reference','') if current else '' }}"></div>
+    <div class="field"><label>Nom complet</label><input name="nom_complet" value="{{ current.get('nom_complet','') if current else '' }}"></div>
+    <div class="field"><label>Puissance Wc</label><input name="puissance_wc" value="{{ current.get('puissance_wc','') if current else '' }}"></div>
+    <div class="field"><label>Type</label><input name="type" value="{{ current.get('type','') if current else '' }}"></div>
+    <div class="field"><label>Cadre</label><input name="cadre" value="{{ current.get('cadre','') if current else '' }}"></div>
+    <div class="field"><label>Backsheet</label><input name="backsheet" value="{{ current.get('backsheet','') if current else '' }}"></div>
+    <div class="field"><label>Dimensions</label><input name="dimensions" value="{{ current.get('dimensions','') if current else '' }}"></div>
+    <div class="field"><label>Longueur cable</label><input name="longueur_cable" value="{{ current.get('longueur_cable','') if current else '' }}"></div>
+    <div class="field"><label>Poids</label><input name="poids" value="{{ current.get('poids','') if current else '' }}"></div>
+    <div class="field"><label>Garantie</label><input name="garantie" value="{{ current.get('garantie','') if current else '' }}"></div>
+    <div class="field"><label>Certif carbone</label><input name="certif_carbone" value="{{ current.get('certif_carbone','') if current else '' }}"></div>
+    <div class="field"><label>ETN</label><input name="etn" value="{{ current.get('etn','') if current else '' }}"></div>
+
+    <div class="field span-2">
+      <label>Image</label>
+      <input type="file" name="image" accept="image/*">
+      {% if current and current.get('image') %}
+        <div class="preview">
+          <img src="{{ current.get('image')|img_url('modules') }}" alt="module">
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="actions span-2">
+      <button type="submit" class="btn">{{ "Mettre a jour" if current else "Ajouter" }}</button>
+      {% if current %}
+        <a class="btn ghost" href="{{ url_for('admin_modules') }}">Annuler</a>
+      {% endif %}
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Liste des modules</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Marque</th>
+          <th>Reference</th>
+          <th>Nom complet</th>
+          <th>Wc</th>
+          <th>Image</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.get('id') }}</td>
+            <td>{{ row.get('marque') }}</td>
+            <td>{{ row.get('reference') }}</td>
+            <td>{{ row.get('nom_complet') }}</td>
+            <td>{{ row.get('puissance_wc') }}</td>
+            <td>
+              {% if row.get('image') %}
+                <img src="{{ row.get('image')|img_url('modules') }}" alt="module">
+              {% endif %}
+            </td>
+            <td class="actions-cell">
+              <a class="btn ghost" href="{{ url_for('admin_modules', edit=row.get('id')) }}">Modifier</a>
+              <form method="post" action="{{ url_for('admin_modules_delete', module_id=row.get('id')) }}" onsubmit="return confirm('Supprimer ?');">
+                <button type="submit" class="btn danger">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

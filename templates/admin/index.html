@@ -1,0 +1,12 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<h1>Administration</h1>
+<p class="muted">Gerer les modules, onduleurs et systemes d'integration.</p>
+
+<div class="card-grid">
+  <a class="card-link" href="{{ url_for('admin_integrations') }}">Systemes d'integration</a>
+  <a class="card-link" href="{{ url_for('admin_modules') }}">Modules PV</a>
+  <a class="card-link" href="{{ url_for('admin_onduleurs') }}">Onduleurs</a>
+</div>
+{% endblock %}

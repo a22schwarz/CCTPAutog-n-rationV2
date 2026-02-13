@@ -1,0 +1,92 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<h1>Systemes d'integration</h1>
+
+<section class="card">
+  <h2>{{ "Modifier" if current else "Ajouter" }} un systeme</h2>
+  <form method="post" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="id" value="{{ current.get('id','') if current else '' }}">
+
+    <div class="field"><label>Marque</label><input name="marque" value="{{ current.get('marque','') if current else '' }}"></div>
+    <div class="field"><label>Reference</label><input name="ref" value="{{ current.get('ref','') if current else '' }}"></div>
+    <div class="field"><label>Fixation</label><input name="fixation" value="{{ current.get('fixation','') if current else '' }}"></div>
+
+    <div class="field"><label>Compat 1</label><input name="compat1" value="{{ current.get('compat1','') if current else '' }}"></div>
+    <div class="field"><label>Compat 2</label><input name="compat2" value="{{ current.get('compat2','') if current else '' }}"></div>
+    <div class="field"><label>Compat 3</label><input name="compat3" value="{{ current.get('compat3','') if current else '' }}"></div>
+    <div class="field"><label>Compat 4</label><input name="compat4" value="{{ current.get('compat4','') if current else '' }}"></div>
+    <div class="field"><label>Compat 5</label><input name="compat5" value="{{ current.get('compat5','') if current else '' }}"></div>
+
+    <div class="field"><label>Carac 1</label><input name="carac1" value="{{ current.get('carac1','') if current else '' }}"></div>
+    <div class="field"><label>Carac 2</label><input name="carac2" value="{{ current.get('carac2','') if current else '' }}"></div>
+    <div class="field"><label>Carac 3</label><input name="carac3" value="{{ current.get('carac3','') if current else '' }}"></div>
+    <div class="field"><label>Carac 4</label><input name="carac4" value="{{ current.get('carac4','') if current else '' }}"></div>
+    <div class="field"><label>Carac 5</label><input name="carac5" value="{{ current.get('carac5','') if current else '' }}"></div>
+
+    <div class="field"><label>Certification</label><input name="certification" value="{{ current.get('certification','') if current else '' }}"></div>
+    <div class="field"><label>Garantie</label><input name="garantie" value="{{ current.get('garantie','') if current else '' }}"></div>
+
+    <div class="field span-2">
+      <label>Caracteristiques (1 par ligne)</label>
+      <textarea name="caracs" rows="4">{{ caracs_text }}</textarea>
+    </div>
+
+    <div class="field span-2">
+      <label>Image</label>
+      <input type="file" name="image" accept="image/*">
+      {% if current and current.get('image') %}
+        <div class="preview">
+          <img src="{{ current.get('image')|img_url('si') }}" alt="si">
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="actions span-2">
+      <button type="submit" class="btn">{{ "Mettre a jour" if current else "Ajouter" }}</button>
+      {% if current %}
+        <a class="btn ghost" href="{{ url_for('admin_integrations') }}">Annuler</a>
+      {% endif %}
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Liste des integrations</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Marque</th>
+          <th>Reference</th>
+          <th>Fixation</th>
+          <th>Image</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.get('id') }}</td>
+            <td>{{ row.get('marque') }}</td>
+            <td>{{ row.get('ref') }}</td>
+            <td>{{ row.get('fixation') }}</td>
+            <td>
+              {% if row.get('image') %}
+                <img src="{{ row.get('image')|img_url('si') }}" alt="si">
+              {% endif %}
+            </td>
+            <td class="actions-cell">
+              <a class="btn ghost" href="{{ url_for('admin_integrations', edit=row.get('id')) }}">Modifier</a>
+              <form method="post" action="{{ url_for('admin_integrations_delete', integration_id=row.get('id')) }}" onsubmit="return confirm('Supprimer ?');">
+                <button type="submit" class="btn danger">Supprimer</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Admin CCTP</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Admin CCTP</div>
+    <nav class="nav">
+      <a href="{{ url_for('admin_index') }}">Accueil</a>
+      <a href="{{ url_for('admin_integrations') }}">Integrations</a>
+      <a href="{{ url_for('admin_modules') }}">Modules</a>
+      <a href="{{ url_for('admin_onduleurs') }}">Onduleurs</a>
+      <a href="{{ url_for('upload') }}">Retour app</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
