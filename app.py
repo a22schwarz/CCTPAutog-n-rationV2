@@ -607,15 +607,39 @@ def form():
     csv_data['deposecandelabres'] = '1' if nb_cand > 0 else '0'
     csv_data['abattagearbres'] = '1' if nb_arb > 0 else '0'
 
-    ctx = {'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '', 'zones': zones,
-           'admin_url': ADMIN_URL,
-           'zones_json': json.dumps(zones), 'panel_options': list(PV_MODULES), 'inverter_options': list(INVERTERS),
-           'si_options': list(SI_OPTIONS), 'latitude': request.form.get('latitude', ''),
-           'longitude': request.form.get('longitude', ''), 'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
-           'bt_mt': request.form.get('bt_mt', 'BT'), 'ZONES': zones, 'NB_ZONES': len(zones),
-           'default_module': module_info.get('Nom complet', '') if module_info else '',
-           'module_details': module_info or {}, **csv_data, 'implantation_globale': implantation_val,
-           'type_installation_csv': ti_val}
+    ctx = {
+        # Construit le contexte envoyé au template formulaire.html ; il préremplit l’interface et transporte les données jusqu’à generate pour produire le Word
+        'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '',
+        # Version texte du CSV (séparateur ;)
+        'zones': zones,
+        # Liste des zones détectées plus haut; utilisée pour afficher une colonne par zone dans la table de paramètres
+        'admin_url': ADMIN_URL,
+        # URL de l'admin
+        'zones_json': json.dumps(zones),
+        # Sérialisation JSON ; pour que generate relise exactement les mêmes zones sans devoir relire le CSV
+        'panel_options': list(PV_MODULES),
+        # panneaux proposés dans les listes déroulantes ; le choix final remontera dans z['module'] et sera réutilisé dans le word
+        'inverter_options': list(INVERTERS),  # Pareil
+        'si_options': list(SI_OPTIONS),
+        # Pour chaque zoneon propose la liste de SI correspondant grâce à la liste établie dans INTEGRATIONS
+        'latitude': request.form.get('latitude', ''),  # on demande de remplir la latitude
+        'longitude': request.form.get('longitude', ''),  # Pareil
+        'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
+        # Choix “Autoconsommation / Vente Totale”  et repris generate pour alimenter les balises word
+        'bt_mt': request.form.get('bt_mt', 'BT'),
+        # Choix BT/MT; repris par generate pour labalise VOTRE_TENSION dans le document word et les balises if bt_mt == "MT" dans 9.3.2.	Fourniture et pose TBGT
+        'ZONES': zones,  # Permet au word d'utiliser zones en majuscules
+        'NB_ZONES': len(zones),
+        # Nombre total de zones utile dans le word pour afficher un bloc seulement s’il y a au moins une zone
+        'default_module': module_info.get('Nom complet', '') if module_info else '',
+        'module_details': module_info or {},
+
+        # ajoute dans le contexte toutes les infos projet extraites du CSV via les alias (ex. nom_projet, ville, adresse, puissance_kwc) ; chaque clé correspond directement à une balise du modèle Word pour être remplacée automatiquement
+        **csv_data,
+
+        'implantation_globale': implantation_val,  # valeur mappée pour sélection par défaut
+        'type_installation_csv': ti_val,  # stocke la valeur brute du CSV (pour usage ultérieur)
+    }
 
     module_details = []
     inverter_details = []
