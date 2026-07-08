@@ -1074,7 +1074,19 @@ def generate():
     ctx["inverter_list"] = dedupe_list(ctx["inverter_list"])
     ctx["si_list"] = dedupe_list(ctx["si_list"])
     ctx["si_details"] = si_list
+    try:
+        tpl.render(ctx)
+    except Exception:
+        from zipfile import ZipFile
 
+        with ZipFile(app.config["TEMPLATE"]) as z:
+            for f in z.namelist():
+                if f.endswith(".xml"):
+                    txt = z.read(f).decode("utf-8", errors="ignore")
+                    if "{{" in txt or "{%" in txt:
+                        print("====", f, "====")
+                        print(txt[txt.find("{") - 200:txt.find("{") + 500])
+        raise
     tpl.render(ctx)  # On remplace les balises par les données du contexte
     buf = BytesIO()  # On crée un tampon mémoire pour stocker le fichier généré
     tpl.save(buf)  # On enregistre le fichier dans le tampon
