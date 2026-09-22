@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, send_file, url_for, redirect  # On importe Flask : (routes / pages / formulaires)
-from docxtpl import DocxTemplate  # permet de remplir le modèle word avec les variables du contexte
-from datetime import datetime  # pour la date
+from docxtpl import DocxTemplate, RichText  # génération Word et texte conditionnellement surligné
+from datetime import datetime, timezone  # pour la date
 import pandas as pd  # poru lire le CSV
 import sqlite3
 import re, \
@@ -8,11 +8,13 @@ import re, \
 from io import BytesIO  # le tampon mémoire qui sert à générer le .docx sans avoir à créer un fichier dans le dur
 import os
 import uuid
-from urllib.parse import quote
+from types import SimpleNamespace
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import urlopen
 
 import requests
 from werkzeug.utils import secure_filename
+from werkzeug.datastructures import MultiDict
 
 BASE_DIR = os.path.dirname(__file__)
 DB_PATH = os.environ.get("DB_PATH", "database.db")
@@ -23,13 +25,43 @@ os.environ["DB_PATH"] = DB_PATH
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "cctp-images")
-if not SUPABASE_URL or not SUPABASE_KEY:
+PROJECT_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff'}
+PROJECT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+# Le lancement direct ``python app.py`` est le mode local et utilise SQLite,
+# même si PyCharm conserve des variables Supabase dans sa configuration.
+# En production (application importée par Gunicorn), les identifiants activent
+# Supabase. CCTP_STORAGE=local|supabase permet de forcer explicitement le choix.
+STORAGE_BACKEND = os.environ.get("CCTP_STORAGE", "").strip().lower()
+if STORAGE_BACKEND not in {"", "local", "sqlite", "supabase"}:
+    raise RuntimeError("CCTP_STORAGE doit valoir 'local', 'sqlite' ou 'supabase'.")
+if STORAGE_BACKEND == "supabase" and not (SUPABASE_URL and SUPABASE_KEY):
     raise RuntimeError(
-        "Supabase est obligatoire. Definir SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY dans l'environnement."
+        "CCTP_STORAGE=supabase exige SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY."
     )
-USE_SUPABASE = True
+USE_SUPABASE = (
+    STORAGE_BACKEND == "supabase"
+    or (
+        STORAGE_BACKEND == ""
+        and __name__ != "__main__"
+        and bool(SUPABASE_URL and SUPABASE_KEY)
+    )
+)
 
 ADMIN_URL = os.environ.get("ADMIN_URL", "/admin")
+INVERTER_FORM_FIELDS = {
+    'marque': 'Marque',
+    'ref': 'Référence',
+    'puissance': 'Puissance kVA',
+    'type': 'Type',
+    'tension': 'Tension nominale',
+    'type-tension': 'Type tension',
+    'raccord': 'Raccordement DC',
+    'para-dc': 'Parafoudre DC',
+    'para-ac': 'Parafoudre AC',
+    'afci': 'AFCI',
+    'garantie': 'Garantie',
+    'ext-garantie': 'Extension garantie',
+}
 
 # Supabase uniquement: pas d'initialisation SQLite.
 
@@ -122,16 +154,116 @@ def _local_upload_image(file_storage, folder):
     return name
 
 def save_image(file_storage, folder):
-    return _sb_upload_image(file_storage, folder)
+    return _sb_upload_image(file_storage, folder) if USE_SUPABASE else _local_upload_image(file_storage, folder)
+
+
+def save_project_image(file_storage):
+    """Enregistre une image de projet et renvoie une référence persistante."""
+    filename = secure_filename(file_storage.filename) if file_storage else ""
+    if os.path.splitext(filename)[1].lower() not in PROJECT_IMAGE_EXTENSIONS:
+        return ""
+    try:
+        file_storage.stream.seek(0)
+        image_data = file_storage.stream.read(PROJECT_IMAGE_MAX_BYTES + 1)
+        file_storage.stream.seek(0)
+        if not image_data or len(image_data) > PROJECT_IMAGE_MAX_BYTES:
+            return ""
+        from docx.image.image import Image
+        Image.from_file(BytesIO(image_data))
+    except Exception:
+        try:
+            file_storage.stream.seek(0)
+        except Exception:
+            pass
+        return ""
+    value = save_image(file_storage, "project-images")
+    if not value or value.startswith(("http://", "https://")):
+        return value
+    return f"project-images/{value}"
+
+
+def normalize_project_image_ref(value):
+    """N'accepte que les références générées dans le dossier du projet."""
+    value = str(value or '').strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc:
+        if not USE_SUPABASE:
+            return ""
+        base = urlparse(SUPABASE_URL)
+        prefix = f"/storage/v1/object/public/{SUPABASE_BUCKET}/project-images/"
+        if parsed.scheme != base.scheme or parsed.netloc != base.netloc:
+            return ""
+        relative_name = unquote(parsed.path)
+        if not relative_name.startswith(prefix):
+            return ""
+        filename = relative_name[len(prefix):]
+        return value if _valid_project_image_name(filename) else ""
+    prefix = "project-images/"
+    if not value.startswith(prefix):
+        return ""
+    filename = value[len(prefix):]
+    return value if _valid_project_image_name(filename) else ""
+
+
+def _valid_project_image_name(filename):
+    stem, extension = os.path.splitext(filename)
+    return bool(re.fullmatch(r'[0-9a-f]{32}', stem)) and extension.lower() in PROJECT_IMAGE_EXTENSIONS
+
+
+def project_image_url(value):
+    value = normalize_project_image_ref(value)
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    return url_for("static", filename=value)
+
+
+def delete_project_image(value):
+    """Supprime une image générée par l'application, sans accepter d'autre chemin."""
+    value = normalize_project_image_ref(value)
+    if not value:
+        return
+    filename = os.path.basename(unquote(urlparse(value).path))
+    if USE_SUPABASE:
+        object_path = quote(f"project-images/{filename}", safe="/")
+        url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{object_path}"
+        response = requests.delete(url, headers=_sb_headers(), timeout=10)
+        response.raise_for_status()
+        return
+    path = os.path.join(BASE_DIR, "static", "project-images", filename)
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def project_photo_refs(project):
+    data = (project or {}).get('form_data', {})
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            data = {}
+    refs = set()
+    for photo_key in ('structure_model', 'structure_location', 'structure_reinforcement'):
+        values = (data or {}).get(f'{photo_key}_photo_saved', [])
+        for value in values if isinstance(values, list) else [values]:
+            ref = normalize_project_image_ref(value)
+            if ref:
+                refs.add(ref)
+    return refs
 
 
 app = Flask(__name__)  # création de l'app Flask
-app.config.update(TEMPLATE='TemplateCCTP.docx', CSV_SEP=';',
+app.config.update(TEMPLATE='TemplateCCTP.updated2.docx', CSV_SEP=';',
                   MAX_ZONES=4)  # on configure le nom du template word à remplir, ce qui sépare les infos du csv (en l'occurence un ;) et le nombre de zones max (car 4 zones possibles en VT)
 
 @app.context_processor
 def inject_admin_url():
-    return {"admin_url": ADMIN_URL}
+    return {"admin_url": ADMIN_URL, "project_image_url": project_image_url}
 
 @app.template_filter("img_url")
 def img_url(value, folder):
@@ -201,6 +333,26 @@ def _sqlite_update(table, data, row_id):
 
 def _sqlite_delete(table, row_id):
     execute_sql(f"DELETE FROM {table} WHERE id=?", (row_id,))
+
+
+def _ensure_local_projects_table():
+    """Met à niveau automatiquement une ancienne base SQLite au démarrage."""
+    if USE_SUPABASE:
+        return
+    execute_sql(
+        """
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL DEFAULT 'Projet sans nom',
+            form_data TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+_ensure_local_projects_table()
 
 def _admin_list(table):
     if USE_SUPABASE:
@@ -311,7 +463,6 @@ def load_si_image(img_name):
     import os
 
     if not img_name or not img_name.strip():
-        print("Nom d'image manquant ou vide.")
         return None
 
     img_name = img_name.strip()
@@ -332,13 +483,10 @@ def load_si_image(img_name):
 
     for name in possible_names:
         path = os.path.join(base_dir, name)
-        print(f"Tentative de récupération de l'image : {path}")  # Debugging line
         if os.path.isfile(path):
-            print(f"Image trouvée à : {path}")  # Debugging line
             with open(path, "rb") as f:
                 return f.read()
 
-    print("Aucune image trouvée pour :", img_name)  # Debugging line
     return None
 
 
@@ -529,10 +677,166 @@ def to_bool(form, key):
     return form.get(key) == 'on'  # dans les formulaires HTML une checkbox renvoie "on" si elle est cochee
 
 
+def review_text(value, missing_label="Non défini", **formatting):
+    """Texte Word normal si renseigné, jaune lorsqu'une vérification est requise."""
+    text = str(value or '').strip()
+    formatting.setdefault('font', 'Source Sans Pro')
+    formatting.setdefault('size', 20)  # taille attendue par docxtpl en demi-points
+    force_regular = 'bold' not in formatting
+    rich_text = (
+        RichText(text, **formatting)
+        if text else RichText(missing_label, highlight='FFFF00', **formatting)
+    )
+    if force_regular:
+        # docxtpl n'écrit aucun attribut lorsque bold=False : Word hérite alors
+        # parfois du gras du paragraphe contenant la balise. On neutralise
+        # explicitement cet héritage dans chaque run généré.
+        rich_text.xml = rich_text.xml.replace(
+            '<w:rPr>', '<w:rPr><w:b w:val="0"/><w:bCs w:val="0"/>'
+        )
+    return rich_text
+
+
+MISSING_SENTINEL = "[[CCTP_MISSING_VALUE]]"
+
+
+class MissingTemplateValue(str):
+    """Valeur visible dans Word mais toujours fausse dans les conditions Jinja."""
+    def __new__(cls):
+        return super().__new__(cls, MISSING_SENTINEL)
+
+    def __bool__(self):
+        return False
+
+    def __iter__(self):
+        return iter(())
+
+    def __getattr__(self, _name):
+        return self
+
+    def __getitem__(self, _key):
+        return self
+
+
+def mark_empty_template_values(value):
+    """Prépare une copie du contexte où les textes vides restent repérables."""
+    if value is None or (isinstance(value, str) and value == ""):
+        return MissingTemplateValue()
+    if isinstance(value, dict):
+        return {key: mark_empty_template_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [mark_empty_template_values(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(mark_empty_template_values(item) for item in value)
+    return value
+
+
+def highlight_missing_values(docx_buffer, highlight_dc_section=False):
+    """Remplace et surligne toutes les informations à vérifier dans le Word."""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    document = Document(docx_buffer)
+    missing_labels = (MISSING_SENTINEL, "Non défini", "Non définie", "inconnu", "inconnue")
+
+    def shade_run(run):
+        properties = run._r.get_or_add_rPr()
+        for existing in properties.findall(qn('w:shd')):
+            properties.remove(existing)
+        shading = OxmlElement('w:shd')
+        shading.set(qn('w:val'), 'clear')
+        shading.set(qn('w:color'), 'auto')
+        shading.set(qn('w:fill'), 'FFFF00')
+        properties.append(shading)
+
+    def force_regular_run(run):
+        properties = run._r.get_or_add_rPr()
+        for tag in ('w:b', 'w:bCs', 'w:i', 'w:iCs'):
+            element = properties.find(qn(tag))
+            if element is None:
+                element = OxmlElement(tag)
+                properties.append(element)
+            element.set(qn('w:val'), '0')
+        fonts = properties.find(qn('w:rFonts'))
+        if fonts is None:
+            fonts = OxmlElement('w:rFonts')
+            properties.append(fonts)
+        for attribute in ('w:ascii', 'w:hAnsi', 'w:cs', 'w:eastAsia'):
+            fonts.set(qn(attribute), 'Source Sans Pro')
+        for tag in ('w:sz', 'w:szCs'):
+            size = properties.find(qn(tag))
+            if size is None:
+                size = OxmlElement(tag)
+                properties.append(size)
+            size.set(qn('w:val'), '18')
+
+    def process_paragraph(paragraph):
+        technical_location = any(marker in paragraph.text.casefold() for marker in (
+            'onduleurs de la zone',
+            'onduleurs seront implantés',
+            'onduleurs seront installés',
+            'coffrets dc de la zone',
+            'coffrets dc seront implantés',
+            'coffrets dc seront installés',
+        ))
+        for run in paragraph.runs:
+            original = run.text
+            if not original:
+                continue
+            text = original.replace(MISSING_SENTINEL, "À compléter")
+            should_highlight = text != original or any(
+                label.casefold() in text.casefold() for label in missing_labels[1:]
+            )
+            if should_highlight:
+                run.text = text
+                shade_run(run)
+            if technical_location:
+                force_regular_run(run)
+
+    def process_table(table):
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    process_paragraph(paragraph)
+                for nested_table in cell.tables:
+                    process_table(nested_table)
+
+    for paragraph in document.paragraphs:
+        process_paragraph(paragraph)
+    if highlight_dc_section:
+        inside_dc_section = False
+        for paragraph in document.paragraphs:
+            if paragraph.text.strip() == "Fourniture et pose des coffrets DC":
+                inside_dc_section = True
+            elif inside_dc_section and paragraph.text.strip() == "Mise à la terre":
+                break
+            if inside_dc_section:
+                for run in paragraph.runs:
+                    if run.text:
+                        shade_run(run)
+                        force_regular_run(run)
+    for table in document.tables:
+        process_table(table)
+    for section in document.sections:
+        for part in (section.header, section.footer):
+            for paragraph in part.paragraphs:
+                process_paragraph(paragraph)
+            for table in part.tables:
+                process_table(table)
+
+    output = BytesIO()
+    document.save(output)
+    output.seek(0)
+    return output
+
+
 # convertit une valeur texte en nombre flottant (float) en gerant les virgules et les valeurs vides
 def _to_float(s):
+    if isinstance(s, (int, float)):
+        return float(s)
     try:
-        s = (s or '').replace(',',
+        s = str(s or '').replace(',',
                               '.').strip()  # si s est None on le remplace par '', on change la virgule en point et on enleve les espaces
         return float(
             s) if s and s != '-' else 0.0  # si c'est pas vide et pas juste '-' on le transforme en float sinon on renvoie 0.0
@@ -542,8 +846,10 @@ def _to_float(s):
 
 # Pareil dns l'autre sens, on convertit un nombre décimal en entier
 def _to_int(s):
+    if isinstance(s, (int, float)):
+        return int(s)
     try:
-        s = (s or '').strip()
+        s = str(s or '').strip()
         return int(s) if s and s != '-' else 0
     except ValueError:
         return 0
@@ -573,15 +879,68 @@ def sanitize_rows(rows):
     return rows  # renvoie le tableau nettoyé
 
 
+def _project_form_values(data):
+    """Recrée un MultiDict à partir des données d'un brouillon sauvegardé."""
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            data = {}
+    pairs = []
+    for key, values in (data or {}).items():
+        for value in values if isinstance(values, list) else [values]:
+            pairs.append((key, str(value)))
+    return MultiDict(pairs)
+
+
+def _list_projects():
+    projects = (
+        _sb_select("projects", order="updated_at.desc")
+        if USE_SUPABASE
+        else query("SELECT * FROM projects")
+    )
+
+    def sort_key(project):
+        data = project.get('form_data', {})
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                data = {}
+        filename = str((data or {}).get('csv_filename', ''))
+        match = re.search(r'(?<!\d)(\d{4})(?!\d)', filename)
+        project['project_number'] = match.group(1) if match else ''
+        name = (project.get('name') or '').casefold()
+        # D'abord les CSV portant un numéro projet à quatre chiffres, puis les
+        # autres brouillons par ordre alphabétique.
+        return (0, int(match.group(1)), name) if match else (1, 0, name)
+
+    # sort_key ajoute aussi project_number, utilisé pour l'affichage dans le menu.
+    return sorted(projects, key=sort_key)
+
+
+def _get_project(project_id):
+    rows = (
+        _sb_select("projects", filters={"id": f"eq.{project_id}"})
+        if USE_SUPABASE
+        else query("SELECT * FROM projects WHERE id = ?", (project_id,))
+    )
+    return rows[0] if rows else None
+
+
 @app.route(
     '/')  # definit la route racine qui affiche la page d'accueil pour envoyer un CSV,charge et renvoie la page HTML upload.html au navigateur
 def upload():
-    return render_template('upload.html')
+    return render_template(
+        'upload.html',
+        projects=_list_projects(),
+        admin_url=ADMIN_URL,
+    )
 
 
 # Après l’envoi du CSV ; elle lit le fichier si présent, prépare toutes les données et affiche le grand formulaire par zones
 @app.route('/form', methods=['POST'])
-def form():
+def form(saved_project=None):
 
     global PV_MODULES, INVERTERS, MODULE_DB, INVERTER_DB, SI_DB
 
@@ -594,10 +953,19 @@ def form():
     INVERTERS = set(INVERTER_DB["Nom complet"].dropna().unique().tolist())
     SI_OPTIONS = set((SI_DB["Marque"] + " - " + SI_DB["Référence"]).dropna().unique().tolist())
 
-    f = request.files.get('csv_file')  # Récupère le fichier envoyé depuis upload.html
-    df = parse_csv(f) if f and f.filename.lower().endswith(
-        '.csv') else pd.DataFrame()  # Si on a bien un .csv, on le lit avec parse_csv pour obtenir un tableau exploitable ; sinon on part sur un DataFrame vide pour quand même afficher le formulaire
-    zones = detect_zones(df)  # Détecte automatiquement “Zone 1”, “Zone 2”, etc. depuis le CSV
+    form_values = _project_form_values(saved_project.get('form_data')) if saved_project else request.form
+    if saved_project:
+        csv_text = form_values.get('csv_text', '')
+        df = parse_csv(csv_text, from_text=True) if csv_text.strip() else pd.DataFrame()
+        try:
+            zones = json.loads(form_values.get('zones_json', '[]'))
+        except json.JSONDecodeError:
+            zones = []
+        zones = zones or detect_zones(df)
+    else:
+        f = request.files.get('csv_file')
+        df = parse_csv(f) if f and f.filename.lower().endswith('.csv') else pd.DataFrame()
+        zones = detect_zones(df)
     csv_data = {k: find_value(df, k) for k in
                 FIELD_ALIASES}  # Extrait les informations “projet” grace aux alias (ex. nom_projet, ville, adresse, puissance_kwc) qui correspondent aux balises word({{ nom_projet }}, {{ ville }}, etc.)
     marque_pv = find_first(df, ['marque pv']) or ''
@@ -613,10 +981,10 @@ def form():
     csv_data['nb_abattagearbres'] = nb_arb
     csv_data['deposecandelabres'] = '1' if nb_cand > 0 else '0'
     csv_data['abattagearbres'] = '1' if nb_arb > 0 else '0'
-
     ctx = {
         # Construit le contexte envoyé au template formulaire.html ; il préremplit l’interface et transporte les données jusqu’à generate pour produire le Word
         'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '',
+        'csv_filename': form_values.get('csv_filename', '') if saved_project else (f.filename if f else ''),
         # Version texte du CSV (séparateur ;)
         'zones': zones,
         # Liste des zones détectées plus haut; utilisée pour afficher une colonne par zone dans la table de paramètres
@@ -629,11 +997,11 @@ def form():
         'inverter_options': list(INVERTERS),  # Pareil
         'si_options': list(SI_OPTIONS),
         # Pour chaque zoneon propose la liste de SI correspondant grâce à la liste établie dans INTEGRATIONS
-        'latitude': request.form.get('latitude', ''),  # on demande de remplir la latitude
-        'longitude': request.form.get('longitude', ''),  # Pareil
-        'AC_VT': request.form.get('AC_VT', 'Autoconsommation'),
+        'latitude': form_values.get('latitude', ''),  # on demande de remplir la latitude
+        'longitude': form_values.get('longitude', ''),  # Pareil
+        'AC_VT': form_values.get('AC_VT', 'Autoconsommation'),
         # Choix “Autoconsommation / Vente Totale”  et repris generate pour alimenter les balises word
-        'bt_mt': request.form.get('bt_mt', 'BT'),
+        'bt_mt': form_values.get('bt_mt', 'BT'),
         # Choix BT/MT; repris par generate pour labalise VOTRE_TENSION dans le document word et les balises if bt_mt == "MT" dans 9.3.2.	Fourniture et pose TBGT
         'ZONES': zones,  # Permet au word d'utiliser zones en majuscules
         'NB_ZONES': len(zones),
@@ -644,7 +1012,7 @@ def form():
         # ajoute dans le contexte toutes les infos projet extraites du CSV via les alias (ex. nom_projet, ville, adresse, puissance_kwc) ; chaque clé correspond directement à une balise du modèle Word pour être remplacée automatiquement
         **csv_data,
 
-        'implantation_globale': implantation_val,  # valeur mappée pour sélection par défaut
+        'implantation_globale': form_values.get('implantation_globale', implantation_val),
         'type_installation_csv': ti_val,  # stocke la valeur brute du CSV (pour usage ultérieur)
     }
 
@@ -679,8 +1047,6 @@ def form():
 
         # Recherche dans la DB
         si_row = get_si_from_db(sys_name, sys_ref)
-        print("SI ROW DEBUG =", si_row)
-
         # On prépare un dict de base
         base = si_row or {}
 
@@ -726,6 +1092,23 @@ def form():
     clean_inverters = clean_inverters.drop_duplicates(subset=["Nom complet"], keep="first")
     ctx["inverter_db"] = clean_inverters.set_index("Nom complet").to_dict(orient="index")
 
+    # Reconstruit les blocs d'onduleurs supplémentaires d'un brouillon sauvegardé.
+    extra_inverter_rows = []
+    for i in range(len(zones)):
+        names = form_values.getlist(f'zone-{i}-inverter-extra')
+        field_values = {
+            suffix: form_values.getlist(f'zone-{i}-inverter-extra-{suffix}')
+            for suffix in INVERTER_FORM_FIELDS
+        }
+        rows = []
+        for row_index, name in enumerate(names):
+            row = {'name': name}
+            for suffix, values in field_values.items():
+                row[suffix] = values[row_index] if row_index < len(values) else ''
+            rows.append(row)
+        extra_inverter_rows.append(rows)
+    ctx['extra_inverter_rows'] = extra_inverter_rows
+
     # Nettoyage et injection SI_DB pour le JS
     clean_si = SI_DB.copy()
 
@@ -743,7 +1126,106 @@ def form():
     else:
         ctx["si_db"] = {}
 
+    # Les informations générales peuvent avoir été corrigées après l'import.
+    # Elles doivent donc primer sur les valeurs extraites du CSV à la reprise.
+    for key in (
+        'nom_projet', 'ville', 'adresse', 'maitre_ouvrage', 'latitude', 'longitude', 'AC_VT',
+        'bt_mt', 'implantation_globale', 'deposecandelabres', 'abattagearbres',
+        'training_required', 'training_responsible',
+        'training_people', 'training_hours', 'project_financing', 'spv_name',
+    ):
+        if form_values.get(key) is not None:
+            ctx[key] = form_values.get(key)
+
+    ctx.update({
+        'form_values': form_values,
+        # Le template emploie déjà request.form à de nombreux endroits. On lui
+        # fournit les valeurs du brouillon lors d'une reprise.
+        'request': SimpleNamespace(form=form_values),
+        'project_id': saved_project.get('id') if saved_project else '',
+        'saved_omb_table': load_table_json(form_values, 'omb_table'),
+        'saved_hang_table': load_table_json(form_values, 'hang_table'),
+    })
     return render_template('formulaire.html', **ctx)
+
+
+@app.route('/projects/<int:project_id>')
+def project_resume(project_id):
+    project = _get_project(project_id)
+    if not project:
+        return "Projet introuvable.", 404
+    return form(saved_project=project)
+
+
+@app.route('/projects/<int:project_id>/delete', methods=['POST'])
+def project_delete(project_id):
+    project = _get_project(project_id)
+    if not project:
+        return "Projet introuvable.", 404
+    if USE_SUPABASE:
+        _sb_delete("projects", {"id": f"eq.{project_id}"})
+    else:
+        _sqlite_delete("projects", project_id)
+    for image_ref in project_photo_refs(project):
+        delete_project_image(image_ref)
+    return redirect(url_for('upload'))
+
+
+@app.route('/projects/save', methods=['POST'])
+def project_save():
+    project_id_raw = (request.form.get('project_id') or '').strip()
+    if project_id_raw and not project_id_raw.isdigit():
+        return "Identifiant de projet invalide.", 400
+    project_id = int(project_id_raw) if project_id_raw else None
+    existing_project = _get_project(project_id) if project_id is not None else None
+    if project_id is not None and not existing_project:
+        return "Projet introuvable.", 404
+    old_photo_refs = project_photo_refs(existing_project)
+    form_data = request.form.to_dict(flat=False)
+    form_data.pop('project_id', None)
+    for photo_key in ('structure_model', 'structure_location', 'structure_reinforcement'):
+        refs = [
+            ref for ref in (
+                normalize_project_image_ref(value)
+                for value in request.form.getlist(f'{photo_key}_photo_saved')
+            )
+            if ref
+        ]
+        image_file = request.files.get(f'{photo_key}_photo_file')
+        if image_file and image_file.filename:
+            saved = save_project_image(image_file)
+            if saved:
+                refs = [saved]
+        form_data[f'{photo_key}_photo_saved'] = refs[:1]
+    form_payload = form_data if USE_SUPABASE else json.dumps(form_data)
+    project_name = (request.form.get('nom_projet') or '').strip() or 'Projet sans nom'
+    payload = {
+        'name': project_name,
+        'form_data': form_payload,
+        'updated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+    }
+    if project_id:
+        if USE_SUPABASE:
+            _sb_update('projects', {'id': f'eq.{project_id}'}, payload)
+        else:
+            _sqlite_update('projects', payload, project_id)
+        saved_id = project_id
+    else:
+        if USE_SUPABASE:
+            inserted = _sb_insert('projects', payload)
+            if not inserted:
+                return "Impossible de sauvegarder le projet.", 502
+            saved_id = inserted[0]['id']
+        else:
+            saved_id = _sqlite_insert('projects', payload)
+    new_photo_refs = {
+        ref for photo_key in ('structure_model', 'structure_location', 'structure_reinforcement')
+        for ref in form_data.get(f'{photo_key}_photo_saved', [])
+        if normalize_project_image_ref(ref)
+    }
+    for obsolete_ref in old_photo_refs - new_photo_refs:
+        delete_project_image(obsolete_ref)
+    return redirect(url_for('project_resume', project_id=saved_id))
 
 
 # noinspection PyUnusedImports
@@ -788,9 +1270,13 @@ def generate():
         'liaison_terre_zones': list({g(f'zone-{i}-liaison_terre', '') for i in range(len(zones))}),
         # Récupère la liaison à la terre pour chaque zone. On crée un ensemble pour éviter les doublons.
         'decouplage_zones': list({g(f'zone-{i}-decouplage', '') for i in range(len(zones))}),  # Pareil
-        'has_paratonnerre': any(f'zone-{i}-paratonnerre' in request.form for i in range(len(zones))),
+        'has_paratonnerre': any(
+            g(f'zone-{i}-paratonnerre') in {'oui', 'on'} for i in range(len(zones))
+        ),
         # Pareil à la différence qu'on ne vérifie pas que l'ensemble des zones ait le paramètre de renséigné mais qu'au mois une zone l'ait pour savori si on affichera la partie dans 8.3.7 Fourniture et pose des coffrets DC
-        'coffretDC': any(f'zone-{i}-coffretDC' in request.form for i in range(len(zones))),
+        'coffretDC': any(
+            g(f'zone-{i}-coffretDC') in {'oui', 'on'} for i in range(len(zones))
+        ),
         'has_sdis_or_icpe': any(
             # Pareil qu'au dessus mais cette fois on cherche à voir si ICPE OU préconisations SDIS apparait au moins une fois (l'un ou l'autre) toujours dans l'ensemble des zones
             ('Préconisations SDIS' in request.form.getlist(f'zone-{i}-autres_specificites')) or
@@ -810,43 +1296,114 @@ def generate():
         'KEEP_LOT_GROS_OEUVRE': 'keep_lot_gros_oeuvre' in request.form,  # Pareil
         'KEEP_LOT_FONDATIONS_SPECIALES': 'keep_lot_fondations_speciales' in request.form,  # Pareil
         'KEEP_LOT_HTA': 'keep_lot_hta' in request.form,  # Pareil
-        'bridage_dynamique_enabled': to_bool(request.form, 'bridage_dyn'),  # Pareil pour le bridage
+        'KEEP_LOT_COUVERTURE': 'keep_lot_couverture' in request.form,
+        'KEEP_DESAMIANTAGE': (
+            'keep_lot_couverture' in request.form and 'keep_desamiantage' in request.form
+        ),
+        'KEEP_LOT_RENFORCEMENT': 'keep_lot_renforcement' in request.form,
+        'bridage_dynamique_enabled': g('bridage_dyn') in {'oui', 'on'},
+        'bridage_dynamique_defined': g('bridage_dyn') in {'oui', 'on', 'non'},
         'bridage_dynamique_value': (g('bridage_dyn_value', '') or '').strip(),
+        'EPC_MODE': (g('epc_mode', 'non_determine') or 'non_determine').strip(),
+        'TRAINING_ENABLED': g('training_required', 'non_determine') == 'oui',
+        'TRAINING_RESPONSIBLE': (g('training_responsible', '') or '').strip(),
+        'TRAINING_PEOPLE': (g('training_people', '') or '').strip(),
+        'TRAINING_HOURS': (g('training_hours', '') or '').strip(),
     }
+
+    ctx['HAS_STRUCTURAL_CONCRETE'] = (
+        ctx['KEEP_LOT_CHARPENTE'] and (ctx['Ombrieres'] or ctx['Hangars'])
+    )
 
     ctx['valorisation'] = "l'autoconsommation" if ctx['AC_VT'] == "Autoconsommation" else "la vente totale"
 
     for i, z in enumerate(zones):
-        for key in ('mode_valorisation', 'typologie_batiment', 'referentiel_technique', 'autres_specificites'):
+        # Le nombre de panneaux peut être corrigé directement dans le formulaire.
+        z['modules'] = _to_int(g(f'zone-{i}-modules', str(z.get('modules', '0'))))
+        z['puissance'] = _to_float(g(f'zone-{i}-puissance', str(z.get('puissance', '0'))))
+
+        for key in ('typologie_batiment', 'referentiel_technique', 'autres_specificites'):
             z[key] = request.form.getlist(f'zone-{i}-{key}')
 
-            # Valeur par défaut spécifique pour la typologie bâtiment
-            if key == 'typologie_batiment':
-                z[f'{key}_display'] = ", ".join(z[key]) if z[key] else "A compléter"
-            else:
-                z[f'{key}_display'] = ", ".join(z[key]) if z[key] else "Non défini"
+            z[f'{key}_display'] = review_text(", ".join(z[key]))
+
+        z['mode_valorisation'] = request.form.getlist(f'zone-{i}-mode_valorisation')
+        # Reprise des brouillons enregistrés pendant la courte version à deux champs.
+        if not z['mode_valorisation']:
+            support = (g(f'zone-{i}-support_scheme', '') or '').strip()
+            energy = (g(f'zone-{i}-energy_use', '') or '').strip()
+            old_support = {'s21': 'S21', 'aos': 'AOS', 'ao_cre': 'AO CRE'}
+            old_energy = {'acc': 'ACC', 'agregateur': 'Agrégateur', 'sans_injection': 'Sans revente'}
+            z['mode_valorisation'] = [
+                value for value in (old_support.get(support), old_energy.get(energy)) if value
+            ]
+        z['mode_valorisation_display'] = review_text(", ".join(z['mode_valorisation']))
 
         z['si'] = g(f'zone-{i}-si', 'Non défini')  # Choix du module photovoltaïque
         if z['si'] == '__manual__':
             z['si_label'] = request.form.get(f'zone-{i}-si-ref', 'Saisie manuelle')
         else:
             z['si_label'] = z['si']
+        z['integration_display'] = review_text(
+            z['si_label'] if z['si_label'] not in {'', 'Non défini'} else ''
+        )
 
         z['module'] = g(f'zone-{i}-module', 'Non défini')  # Choix du module photovoltaïque
         if z['module'] == '__manual__':
             z['module_label'] = request.form.get(f'zone-{i}-module-ref', 'Saisie manuelle')
         else:
             z['module_label'] = z['module']
+        z['module_display'] = review_text(
+            z['module_label'] if z['module_label'] not in {'', 'Non défini'} else ''
+        )
 
-        z['inverter'] = g(f'zone-{i}-inverter', 'Non défini')
-        if z['inverter'] == '__manual__':
-            z['inverter_label'] = request.form.get(f'zone-{i}-inverter-ref', 'Saisie manuelle')
-        else:
-            z['inverter_label'] = z['inverter']
+        z['inverter'] = (g(f'zone-{i}-inverter', 'Non défini') or 'Non défini').strip()
+        extra_inverter_values = request.form.getlist(f'zone-{i}-inverter-extra')
+        inverter_entries = []
+        if z['inverter'] and z['inverter'] != 'Non défini':
+            inverter_entries.append((z['inverter'], None))
+        inverter_entries.extend(
+            (value.strip(), extra_index)
+            for extra_index, value in enumerate(extra_inverter_values)
+            if value and value.strip()
+        )
+        z['inverters'] = []
+        for name, extra_index in inverter_entries:
+            if name == '__manual__':
+                if extra_index is None:
+                    label = request.form.get(f'zone-{i}-inverter-ref', 'Saisie manuelle')
+                else:
+                    manual_refs = request.form.getlist(f'zone-{i}-inverter-extra-ref')
+                    label = manual_refs[extra_index] if extra_index < len(manual_refs) else 'Saisie manuelle'
+            else:
+                label = name
+            z['inverters'].append({
+                'name': name,
+                'label': label,
+                'extra_index': extra_index,
+            })
+        z['inverter_labels'] = [item['label'] for item in z['inverters']]
+        z['inverter_count'] = len(z['inverters'])
+        z['has_multiple_inverters'] = len(z['inverters']) > 1
+        z['inverter_label'] = ', '.join(z['inverter_labels']) if z['inverter_labels'] else 'Non défini'
+        z['inverter_display'] = review_text(
+            z['inverter_label'] if z['inverter_label'] not in {'', 'Non défini'} else ''
+        )
+        z['inverter_location'] = (g(f'zone-{i}-inverter-location', '') or '').strip()
+        z['inverter_location_other'] = (g(f'zone-{i}-inverter-location-other', '') or '').strip()
+        z['inverter_roof_frame'] = (g(f'zone-{i}-inverter-roof-frame', 'non_determine') or 'non_determine').strip()
         z['webdyn'] = (g(f'zone-{i}-webdyn', 'Aucun') or 'Aucun').strip()  # Type de supervision (Webdyn)
-        z['paratonnerre'] = f'zone-{i}-paratonnerre' in request.form  # Présence de paratonnerre
-        z['coffretDC'] = f'zone-{i}-coffretDC' in request.form
-        z['bridage_enabled'] = (g(f'zone-{i}-bridage_enabled') is not None)  # Activation du bridage statique
+        z['paratonnerre_choice'] = (g(f'zone-{i}-paratonnerre', 'non_determine') or 'non_determine').strip()
+        z['paratonnerre'] = z['paratonnerre_choice'] in {'oui', 'on'}
+        z['coffret_dc_choice'] = (g(f'zone-{i}-coffretDC', 'non_determine') or 'non_determine').strip()
+        z['coffretDC'] = z['coffret_dc_choice'] in {'oui', 'on'}
+        z['coffret_dc_display'] = review_text(
+            {'oui': 'Oui', 'on': 'Oui', 'non': 'Non'}.get(z['coffret_dc_choice'], '')
+        )
+        z['coffret_dc_location'] = (g(f'zone-{i}-coffretDC-location', '') or '').strip()
+        z['coffret_dc_location_other'] = (g(f'zone-{i}-coffretDC-location-other', '') or '').strip()
+        z['bridage_choice'] = (g(f'zone-{i}-bridage_enabled', 'non_determine') or 'non_determine').strip()
+        z['bridage_enabled'] = z['bridage_choice'] in {'oui', 'on'}
         z['bridage_value'] = (g(f'zone-{i}-bridage_value', '') or '').strip() if z[
             'bridage_enabled'] else ''  # On récupère la valeur du bridage et on l'assigne directement si activé et non vide
 
@@ -857,6 +1414,190 @@ def generate():
     has_ombrieres = any((z.get('type') or '') in OMB_TYPES for z in zones)  # Vérifie si des zones ont des ombrières
     has_toiture = any((z.get('type') or '') in TOITURE_TYPES for z in zones)  # Vérifie si des zones ont des toitures
     total_puiss, total_mod = compute_totals(zones)  # Calcule la puissance totale et le nombre de modules
+
+    inverter_location_labels = {
+        'ombriere_head': "en tête de poteau d’ombrière",
+        'roof': "en toiture",
+        'roof_frame': "en toiture",
+        'external_facade': "en façade extérieure du bâtiment",
+        'indoor_room': "dans un local technique intérieur dédié",
+        'ground_frame': "au sol sur un châssis ou une dalle adaptés",
+    }
+    inverter_location_lines = []
+    selected_inverter_locations = set()
+    for zone_index, zone in enumerate(zones, 1):
+        location = zone.get('inverter_location', '')
+        selected_inverter_locations.add(location) if location else None
+        if location == 'other':
+            label = zone.get('inverter_location_other', '')
+        else:
+            label = inverter_location_labels.get(location, '')
+        zone_name = zone.get('name') or f'Zone {zone_index}'
+        if label:
+            zone_label = zone_name[:1].lower() + zone_name[1:]
+            inverter_location_lines.append(
+                f"Pour la {zone_label}, les onduleurs seront installés {label}."
+            )
+        else:
+            inverter_location_lines.append("")
+
+    if zones and all(zone.get('inverter_location') and (
+        zone.get('inverter_location') != 'other' or zone.get('inverter_location_other')
+    ) for zone in zones):
+        ctx['INVERTER_LOCATION_TEXT'] = " ".join(inverter_location_lines)
+    else:
+        ctx['INVERTER_LOCATION_TEXT'] = MissingTemplateValue()
+
+    location_requirements = []
+    if 'ombriere_head' in selected_inverter_locations:
+        location_requirements.append(
+            "En tête de poteau d’ombrière, les supports seront dimensionnés pour les charges, le vent, "
+            "les vibrations et l’accessibilité de maintenance, avec protection contre les chocs et intempéries."
+        )
+    if selected_inverter_locations.intersection({'roof', 'roof_frame'}):
+        location_requirements.append(
+            "En toiture, l’implantation préservera l’étanchéité et les dégagements nécessaires à la ventilation, "
+            "à l’exploitation et à la maintenance des onduleurs."
+        )
+    if 'external_facade' in selected_inverter_locations:
+        location_requirements.append(
+            "En façade extérieure, ils seront protégés des chocs et intempéries, fixés sur un support adapté "
+            "et implantés en tenant compte des exigences de sécurité incendie applicables."
+        )
+    if 'indoor_room' in selected_inverter_locations:
+        location_requirements.append(
+            "Le local technique intérieur disposera d’une ventilation adaptée, d’une signalétique, d’un accès "
+            "de maintenance et des performances de résistance au feu exigées par le référentiel du projet."
+        )
+    if 'ground_frame' in selected_inverter_locations:
+        location_requirements.append(
+            "Au sol, les onduleurs seront installés sur une dalle ou un châssis stable, hors d’eau, protégé des "
+            "chocs et compatible avec les contraintes d’exploitation et de maintenance."
+        )
+    ctx['INVERTER_LOCATION_REQUIREMENTS'] = (
+        " ".join(location_requirements) if location_requirements else MissingTemplateValue()
+    )
+    roof_zones = [zone for zone in zones if zone.get('inverter_location') in {'roof', 'roof_frame'}]
+    ctx['HAS_ROOF_INVERTERS'] = bool(roof_zones)
+    ctx['HAS_ROOF_CHASSIS'] = any(
+        zone.get('inverter_roof_frame') == 'oui' or (
+            zone.get('inverter_location') == 'roof_frame'
+            and zone.get('inverter_roof_frame') == 'non_determine'
+        )
+        for zone in roof_zones
+    )
+    ctx['ROOF_CHASSIS_UNDEFINED'] = any(
+        zone.get('inverter_roof_frame') == 'non_determine'
+        and zone.get('inverter_location') != 'roof_frame'
+        for zone in roof_zones
+    )
+    ctx['ROOF_CHASSIS_REVIEW'] = review_text(
+        '', "À compléter : préciser si un châssis de pose est prévu pour les onduleurs en toiture."
+    ) if ctx['ROOF_CHASSIS_UNDEFINED'] else review_text('')
+
+    dc_choices = [zone.get('coffret_dc_choice', 'non_determine') for zone in zones]
+    ctx['COFFRET_DC_UNDEFINED'] = any(choice == 'non_determine' for choice in dc_choices)
+    ctx['SHOW_COFFRET_DC'] = ctx['coffretDC'] or ctx['COFFRET_DC_UNDEFINED']
+    if ctx['COFFRET_DC_UNDEFINED']:
+        ctx['EARTHING_DC_BOX_TEXT'] = review_text('', "Les coffrets DC ;")
+    elif ctx['coffretDC']:
+        ctx['EARTHING_DC_BOX_TEXT'] = review_text("Les coffrets DC ;")
+    else:
+        ctx['EARTHING_DC_BOX_TEXT'] = False
+    ctx['DC_LABEL_LOCATION_TEXT'] = review_text(
+        "Une étiquette sur la partie DC avec la mention « Attention, câbles courant continu sous tension » "
+        "au niveau des boîtes de jonction, des coffrets DC et des canalisations DC ;"
+        if ctx['SHOW_COFFRET_DC'] else
+        "Une étiquette sur la partie DC avec la mention « Attention, câbles courant continu sous tension » "
+        "au niveau des boîtes de jonction et des canalisations DC ;"
+    )
+    dc_switch_label = (
+        "Une étiquette portant la mention « Ne pas manœuvrer en charge » à l’intérieur des coffrets DC "
+        "et à proximité des sectionneurs-fusibles ;"
+    )
+    if ctx['COFFRET_DC_UNDEFINED']:
+        ctx['DC_BOX_SWITCH_LABEL_TEXT'] = review_text('', dc_switch_label)
+    elif ctx['coffretDC']:
+        ctx['DC_BOX_SWITCH_LABEL_TEXT'] = review_text(dc_switch_label)
+    else:
+        ctx['DC_BOX_SWITCH_LABEL_TEXT'] = False
+    ctx['STRING_LABEL_TEXT'] = review_text(
+        "Chaque chaîne sera repérée par un étiquetage spécifique (N° Chaîne / N° MPPT / N° OND), en sortie "
+        + ("de chaîne, au niveau des coffrets DC et au niveau de l’onduleur." if ctx['SHOW_COFFRET_DC'] else "de chaîne et au niveau de l’onduleur.")
+    )
+
+    dc_location_labels = {
+        'ombriere_head': "en tête de poteau d’ombrière",
+        'roof_frame': "en toiture sur un châssis métallique adapté",
+        'external_facade': "en façade extérieure du bâtiment",
+        'indoor_room': "dans un local technique dédié",
+        'ground_frame': "au sol sur un châssis ou une dalle adaptés",
+    }
+    dc_location_lines = []
+    dc_location_missing = False
+    for zone_index, zone in enumerate(zones, 1):
+        if not zone.get('coffretDC') and zone.get('coffret_dc_choice') != 'non_determine':
+            continue
+        location = zone.get('coffret_dc_location', '')
+        label = (
+            zone.get('coffret_dc_location_other', '')
+            if location == 'other' else dc_location_labels.get(location, '')
+        )
+        zone_name = zone.get('name') or f'Zone {zone_index}'
+        if label:
+            zone_label = zone_name[:1].lower() + zone_name[1:]
+            dc_location_lines.append(
+                f"Pour la {zone_label}, les coffrets DC seront installés {label}."
+            )
+        else:
+            dc_location_missing = True
+    ctx['DC_BOX_LOCATION_TEXT'] = (
+        MissingTemplateValue()
+        if dc_location_missing else " ".join(dc_location_lines)
+    )
+
+    installation_responsibility = (
+        g('ombriere_installation_responsibility', 'non_determine') or 'non_determine'
+    ).strip()
+    full_integration_text = "Le titulaire devra assurer la pose du système d’intégration."
+    full_module_text = "Le titulaire devra assurer la pose des modules photovoltaïques."
+    if has_ombrieres and ctx['KEEP_LOT_CHARPENTE']:
+        if installation_responsibility == 'lot_charpente':
+            ctx['INTEGRATION_INSTALLATION_TEXT'] = review_text(
+                "Le titulaire devra assurer la pose du système d’intégration, hormis pour les ombrières "
+                "photovoltaïques, pour lesquelles cette prestation sera réalisée par le lot Charpente."
+            )
+            ctx['MODULE_INSTALLATION_TEXT'] = review_text(
+                "Le titulaire devra assurer la pose des modules photovoltaïques, hormis pour les ombrières "
+                "photovoltaïques, pour lesquelles cette prestation sera réalisée par le lot Charpente."
+            )
+        elif installation_responsibility == 'titulaire_pv':
+            ctx['INTEGRATION_INSTALLATION_TEXT'] = review_text(full_integration_text)
+            ctx['MODULE_INSTALLATION_TEXT'] = review_text(full_module_text)
+        else:
+            missing_responsibility = (
+                "À compléter : préciser si la pose des systèmes d’intégration et des modules des ombrières "
+                "est à la charge du titulaire photovoltaïque ou du lot Charpente."
+            )
+            ctx['INTEGRATION_INSTALLATION_TEXT'] = review_text('', missing_responsibility)
+            ctx['MODULE_INSTALLATION_TEXT'] = review_text('', missing_responsibility)
+    else:
+        ctx['INTEGRATION_INSTALLATION_TEXT'] = review_text(full_integration_text)
+        ctx['MODULE_INSTALLATION_TEXT'] = review_text(full_module_text)
+
+    selected_modes = {
+        mode for z in zones for mode in (z.get('mode_valorisation') or [])
+    }
+    support_schemes = list(dict.fromkeys(
+        mode for z in zones for mode in (z.get('mode_valorisation') or [])
+        if mode in {'S21', 'AOS', 'AO CRE'}
+    ))
+    if 'ACC' in selected_modes:
+        ctx['valorisation'] = "l’autoconsommation collective"
+    elif 'Agrégateur' in selected_modes:
+        ctx['valorisation'] = "la revente auprès d’un agrégateur"
+    elif 'Sans revente' in selected_modes:
+        ctx['valorisation'] = "l’autoconsommation sans revente"
 
     # On met à jour le contexte avec ces données globales
     ctx.update({
@@ -871,14 +1612,34 @@ def generate():
         # Liste des intégrations sélectionnées par zone
         'SELECTED_MODULES': [z.get('module', '') for z in zones],  # Liste des modules sélectionnés par zone
         'SELECTED_INV': [z.get('inverter', '') for z in zones],  # Liste des onduleurs sélectionnés par zone
+        'SELECTED_INVERTERS': [z.get('inverter_labels', []) for z in zones],
+        'HAS_MULTIPLE_INVERTERS': any(z.get('has_multiple_inverters') for z in zones),
         'AUTOCONSOMMATION': g('AC_VT', 'Vente Totale'),  # Choix AC/VT
         'BT_MT': g('bt_mt', 'BT'),  # Choix BT/MT
         'puissance_kwc': total_puiss  # Puissance totale pour le CCTP
     })
+    project_financing = (g('project_financing', 'non_determine') or 'non_determine').strip()
+    client_name = (g('maitre_ouvrage') or '').strip()
+    if project_financing == 'tiers_investissement':
+        effective_owner = (g('spv_name') or '').strip()
+    elif project_financing == 'achat_direct':
+        effective_owner = client_name
+    else:
+        effective_owner = ''
+
+    ctx.update({
+        'SUPPORT_SCHEMES': support_schemes,
+        'HAS_VENTE_TOTALE': ctx['AC_VT'] == 'Vente Totale',
+        'HAS_AUTOCONSOMMATION': ctx['AC_VT'] == 'Autoconsommation' and 'ACC' not in selected_modes,
+        'HAS_ACC': 'ACC' in selected_modes,
+        'HAS_AGGREGATEUR': 'Agrégateur' in selected_modes,
+        'HAS_ICPE': any('ICPE' in (z.get('typologie_batiment') or []) for z in zones),
+    })
 
     # Détection des plots soudés
     has_plots_soudes = any(
-        'TT SOUDE' in (z.get('type') or '').upper() and f'zone-{i}-plots_soudes' in request.form
+        'TT SOUDE' in (z.get('type') or '').upper()
+        and g(f'zone-{i}-plots_soudes') in {'oui', 'on'}
         for i, z in enumerate(zones)
     )
     ctx['has_plots_soudes'] = has_plots_soudes
@@ -910,11 +1671,110 @@ def generate():
         'HANG_TABLE': sanitize_rows(load_table_json(request.form, 'hang_table'))  # Données pour les hangars
     })
 
+    # Valeurs propres à la page de garde : les informations absentes doivent
+    # rester immédiatement visibles dans le document à relire.
+    ctx.update({
+        'COVER_NOM_PROJET': review_text(
+            g('nom_projet') or g('nom projet'), 'À compléter',
+            size=24, bold=True, color='175649'
+        ),
+        'COVER_SITE_VILLE': review_text(
+            g('ville'), 'À compléter', size=18, color='175649'
+        ),
+        'COVER_PUISSANCE': review_text(
+            total_puiss if total_puiss else '', 'À compléter', size=18, color='175649'
+        ),
+        'COVER_MAITRE_OUVRAGE': review_text(
+            effective_owner, 'À compléter', size=24, bold=True, color='175649'
+        ),
+        'COVER_ADRESSE': review_text(
+            g('adresse'), 'À compléter', size=18, color='1D1D1B'
+        ),
+        'COVER_ADDRESS_VILLE': review_text(
+            g('ville'), 'À compléter', size=18, color='1D1D1B'
+        ),
+    })
+
     tpl = DocxTemplate(app.config['TEMPLATE'])
     from docxtpl import InlineImage
     from docx.shared import Cm
     import os
 
+    def inline_project_image(source, max_width_cm, max_height_cm):
+        if not source:
+            return ""
+        try:
+            if hasattr(source, 'read'):
+                source.stream.seek(0)
+                data = source.read(10 * 1024 * 1024 + 1)
+                if len(data) > 10 * 1024 * 1024:
+                    return ""
+                source = BytesIO(data)
+            elif str(source).startswith(('http://', 'https://')):
+                response = requests.get(str(source), timeout=15)
+                response.raise_for_status()
+                if len(response.content) > 10 * 1024 * 1024:
+                    return ""
+                source = BytesIO(response.content)
+            else:
+                path = os.path.join(BASE_DIR, 'static', str(source).replace('/', os.sep))
+                if not os.path.isfile(path):
+                    return ""
+                source = path
+            from docx.image.image import Image
+            image_info = Image.from_file(source)
+            if hasattr(source, 'seek'):
+                source.seek(0)
+            max_width = Cm(max_width_cm)
+            max_height = Cm(max_height_cm)
+            if image_info.width * max_height > image_info.height * max_width:
+                return InlineImage(tpl, source, width=max_width)
+            return InlineImage(tpl, source, height=max_height)
+        except Exception:
+            return ""
+
+    def missing_photo_placeholder():
+        """Bandeau jaune utilisé dans le Word lorsqu'une photo est attendue."""
+        import struct
+        import zlib
+
+        width, height = 1200, 100
+        scanline = b'\x00' + bytes((255, 242, 0)) * width
+        raw_pixels = scanline * height
+
+        def png_chunk(kind, data):
+            return (
+                struct.pack('>I', len(data)) + kind + data
+                + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+            )
+
+        png = (
+            b'\x89PNG\r\n\x1a\n'
+            + png_chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0))
+            + png_chunk(b'IDAT', zlib.compress(raw_pixels))
+            + png_chunk(b'IEND', b'')
+        )
+        return InlineImage(tpl, BytesIO(png), width=Cm(10))
+
+    for photo_key, context_key in (
+        ('structure_model', 'STRUCTURE_MODEL_PHOTO'),
+        ('structure_location', 'STRUCTURE_LOCATION_PHOTO'),
+        ('structure_reinforcement', 'STRUCTURE_REINFORCEMENT_PHOTO'),
+    ):
+        source = request.files.get(f'{photo_key}_photo_file')
+        if not source or not source.filename:
+            source = normalize_project_image_ref(
+                next(iter(request.form.getlist(f'{photo_key}_photo_saved')), '')
+            )
+        ctx[context_key] = inline_project_image(source, 14.5, 9) or missing_photo_placeholder()
+    ctx['STRUCTURE_STUDY_CONCLUSIONS'] = review_text(
+        g('structure_study_conclusions'),
+        "À compléter à partir des conclusions de l’étude structurelle."
+    )
+    ctx['STRUCTURE_STUDY_PRESCRIPTIONS'] = review_text(
+        g('structure_study_prescriptions'),
+        "À compléter : préciser les renforcements et travaux préconisés par l’étude structurelle."
+    )
     def si_photo(img_name):
         if not img_name:
             return ""
@@ -957,31 +1817,46 @@ def generate():
 
     inverter_list = []
     for i, z in enumerate(zones):
-        inv_name = (z.get('inverter') or '').strip()
-        if not inv_name or inv_name == 'Non défini':
-            continue
-        if inv_name == '__manual__':
-            inv = {
-                "Marque": request.form.get(f'zone-{i}-inverter-marque', ''),
-                "Référence": request.form.get(f'zone-{i}-inverter-ref', ''),
-                "Puissance kVA": request.form.get(f'zone-{i}-inverter-puissance', ''),
-                "Type": request.form.get(f'zone-{i}-inverter-type', ''),
-                "Tension nominale": request.form.get(f'zone-{i}-inverter-tension', ''),
-                "Type tension": request.form.get(f'zone-{i}-inverter-type-tension', ''),
-                "Raccordement DC": request.form.get(f'zone-{i}-inverter-raccord', ''),
-                "Parafoudre DC": request.form.get(f'zone-{i}-inverter-para-dc', ''),
-                "Parafoudre AC": request.form.get(f'zone-{i}-inverter-para-ac', ''),
-                "AFCI": request.form.get(f'zone-{i}-inverter-afci', ''),
-                "Garantie": request.form.get(f'zone-{i}-inverter-garantie', ''),
-                "Extension garantie": request.form.get(f'zone-{i}-inverter-ext-garantie', ''),
-            }
-            inverter_list.append(inv)
-        else:
-            inv = get_inverter_from_db(inv_name)
+        for inverter_index, selected_inverter in enumerate(z.get('inverters', [])):
+            inv_name = (selected_inverter.get('name') or '').strip()
+            if not inv_name or inv_name == 'Non défini':
+                continue
+            extra_index = selected_inverter.get('extra_index')
+            if extra_index is not None:
+                inv = {}
+                for suffix, document_key in INVERTER_FORM_FIELDS.items():
+                    values = request.form.getlist(f'zone-{i}-inverter-extra-{suffix}')
+                    inv[document_key] = values[extra_index] if extra_index < len(values) else ''
+                # Compatibilité avec les anciens brouillons, sans caractéristiques enregistrées.
+                if not any(str(value).strip() for value in inv.values()):
+                    inv = get_inverter_from_db(inv_name)
+            elif inv_name == '__manual__':
+                inv = {
+                    "Marque": request.form.get(f'zone-{i}-inverter-marque', ''),
+                    "Référence": request.form.get(f'zone-{i}-inverter-ref', ''),
+                    "Puissance kVA": request.form.get(f'zone-{i}-inverter-puissance', ''),
+                    "Type": request.form.get(f'zone-{i}-inverter-type', ''),
+                    "Tension nominale": request.form.get(f'zone-{i}-inverter-tension', ''),
+                    "Type tension": request.form.get(f'zone-{i}-inverter-type-tension', ''),
+                    "Raccordement DC": request.form.get(f'zone-{i}-inverter-raccord', ''),
+                    "Parafoudre DC": request.form.get(f'zone-{i}-inverter-para-dc', ''),
+                    "Parafoudre AC": request.form.get(f'zone-{i}-inverter-para-ac', ''),
+                    "AFCI": request.form.get(f'zone-{i}-inverter-afci', ''),
+                    "Garantie": request.form.get(f'zone-{i}-inverter-garantie', ''),
+                    "Extension garantie": request.form.get(f'zone-{i}-inverter-ext-garantie', ''),
+                }
+            else:
+                inv = get_inverter_from_db(inv_name)
             if inv:
+                inv = dict(inv)
+                inv['Zone'] = z.get('name', f'Zone {i + 1}')
+                inv['zone_name'] = inv['Zone']
+                inv['is_additional'] = inverter_index > 0
                 inverter_list.append(inv)
 
     ctx['inverter_list'] = inverter_list
+    ctx['NB_INVERTERS'] = len(inverter_list)
+    ctx['NB_INVERTERS_BY_ZONE'] = [z.get('inverter_count', 0) for z in zones]
 
     si_list = []
 
@@ -1025,37 +1900,24 @@ def generate():
     from docxtpl import InlineImage
     from docx.shared import Cm
 
-    print("===== DEBUG SI_LIST =====")
     for si in si_list:
         img_name = (si.get("Image") or "").strip()
-        print("----")
-        print("SI :", si.get("Marque"), "-", si.get("Référence"))
-        print("Image demandée :", img_name)
 
         if not img_name:
-            print("AUCUNE image définie pour ce SI")
             si["PHOTO"] = ""
             continue
         if img_name.startswith("http://") or img_name.startswith("https://"):
             try:
                 with urlopen(img_name) as resp:
                     si["PHOTO"] = InlineImage(tpl, BytesIO(resp.read()), width=Cm(5))
-                print("✔ Image URL chargée !")
             except Exception:
-                print("✘ Image URL introuvable :", img_name)
                 si["PHOTO"] = ""
             continue
 
         path = os.path.join("static", "si", img_name)
-        print("Chemin testé :", path)
-
-        print("Fichiers présents dans static/si :", os.listdir(os.path.join("static", "si")))
-
         if os.path.exists(path):
-            print("✔ Image trouvée !")
             si["PHOTO"] = InlineImage(tpl, path, width=Cm(5))
         else:
-            print("✘ Image introuvable :", path)
             si["PHOTO"] = ""
 
     ctx["si_list"] = si_list
@@ -1074,23 +1936,15 @@ def generate():
     ctx["inverter_list"] = dedupe_list(ctx["inverter_list"])
     ctx["si_list"] = dedupe_list(ctx["si_list"])
     ctx["si_details"] = si_list
-    try:
-        tpl.render(ctx)
-    except Exception:
-        from zipfile import ZipFile
-
-        with ZipFile(app.config["TEMPLATE"]) as z:
-            for f in z.namelist():
-                if f.endswith(".xml"):
-                    txt = z.read(f).decode("utf-8", errors="ignore")
-                    if "{{" in txt or "{%" in txt:
-                        print("====", f, "====")
-                        print(txt[txt.find("{") - 200:txt.find("{") + 500])
-        raise
-    tpl.render(ctx)  # On remplace les balises par les données du contexte
+    # Les variables présentes dans le modèle mais absentes du contexte ne
+    # doivent plus disparaître silencieusement dans le document final.
+    for variable_name in tpl.get_undeclared_template_variables(context=ctx):
+        ctx[variable_name] = MissingTemplateValue()
+    tpl.render(mark_empty_template_values(ctx))
     buf = BytesIO()  # On crée un tampon mémoire pour stocker le fichier généré
     tpl.save(buf)  # On enregistre le fichier dans le tampon
-    buf.seek(0)  # On se positionne au début du tampon pour pouvoir l'envoyer
+    buf.seek(0)
+    buf = highlight_missing_values(buf, ctx.get('COFFRET_DC_UNDEFINED', False))
 
     # Envoi du fichier au navigateur pour téléchargement
     return send_file(

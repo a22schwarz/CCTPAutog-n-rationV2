@@ -8,27 +8,36 @@
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap"
           rel="stylesheet"/>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
 </head>
 <body>
-<video id="bg-video" autoplay muted loop>
-    <source src="{{ url_for('static', filename='videos/bron_drone.mp4') }}" type="video/mp4">
-</video>
-<div id="bg-overlay"></div>
-<a class="btn btn-ghost admin-link" href="{{ admin_url }}" target="_blank" rel="noopener">Admin BDD</a>
 <main class="container">
-    <header>
-        <img src="{{ url_for('static', filename='img/virya_logo.svg') }}" alt="Logo Virya" class="logo"/>
-        <div>
-            <h1>Générateur de CCTP</h1>
+    <header class="app-header">
+        <div class="header-identity">
+            <div class="logo-wrap">
+                <img src="{{ url_for('static', filename='img/virya_logo.svg') }}" alt="Logo Virya" class="logo"/>
+            </div>
+            <div class="header-title">
+                <span class="eyebrow">CCTP photovoltaïque</span>
+                <h1><span>Projet :</span> {{ nom_projet or 'Nouveau projet' }}</h1>
+            </div>
+        </div>
+        <div class="header-actions">
+            <a class="btn btn-ghost" href="{{ url_for('upload') }}">Retour au menu</a>
+            <a class="btn btn-ghost" href="{{ admin_url }}" target="_blank" rel="noopener">Catalogue</a>
         </div>
     </header>
-    <form method="POST" action="/generate" autocomplete="off" novalidate>
+    <form method="POST" action="/generate" enctype="multipart/form-data" autocomplete="off" novalidate>
+        <input type="hidden" name="project_id" value="{{ project_id }}"/>
         <textarea name="csv_text" hidden>{{ csv_text }}</textarea>
+        <input type="hidden" name="csv_filename" value="{{ csv_filename|e }}"/>
         <input type="hidden" name="zones_json" value='{{ zones_json|safe }}'/>
         <input type="hidden" name="type_installation_csv" value="{{ type_installation_csv|e }}"/>
 
         <section class="card">
-            <h3>Informations générales</h3>
+            <div class="card-heading">
+                <h3>Informations générales</h3>
+            </div>
             <div class="grid-3">
                 <div class="group">
                     <label for="AC_VT">AC / VT</label>
@@ -70,6 +79,22 @@
                     </select>
                 </div>
             </div>
+            {% set project_financing = form_values.get('project_financing', 'non_determine') %}
+            <div class="grid-2">
+                <div class="group">
+                    <label for="project_financing">Montage du projet</label>
+                    <select name="project_financing" id="project_financing">
+                        <option value="non_determine" {% if project_financing == 'non_determine' %}selected{% endif %}>Non défini</option>
+                        <option value="achat_direct" {% if project_financing == 'achat_direct' %}selected{% endif %}>Achat direct par le client</option>
+                        <option value="tiers_investissement" {% if project_financing == 'tiers_investissement' %}selected{% endif %}>Tiers-investissement Virya</option>
+                    </select>
+                </div>
+                <div class="group" id="spv-name-group">
+                    <label for="spv_name">Nom de la SPV Virya — maître d’ouvrage</label>
+                    <input type="text" name="spv_name" id="spv_name" value="{{ form_values.get('spv_name', '') }}"
+                           placeholder="Raison sociale exacte de la SPV"/>
+                </div>
+            </div>
             <div class="grid-3">
                 <div class="group">
                     <label for="nom_projet">Nom du projet</label>
@@ -83,6 +108,11 @@
                     <label for="adresse">Adresse</label>
                     <input type="text" id="adresse" name="adresse" value="{{ adresse }}"/>
                 </div>
+            </div>
+            <div class="group">
+                <label for="maitre_ouvrage">Client du projet</label>
+                <input type="text" id="maitre_ouvrage" name="maitre_ouvrage" value="{{ maitre_ouvrage }}"/>
+                <small>En tiers-investissement, ce client reste distinct de la SPV Virya maître d’ouvrage.</small>
             </div>
             </div>
             <div class="grid-2">
@@ -118,19 +148,17 @@
             </div>
 
         </section>
-        <section class="card">
-            <h3>Paramètres par zone</h3>
+        <section class="card zones-card">
+            <div class="card-heading">
+                <h3>Paramètres par zone</h3>
+            </div>
             <div class="table-wrap">
-                <table>
-                    <thead>
-                    <tr>
-                        <th>Paramètre</th>
-                        {% for z in zones %}
-                        <th>{{ z.name }}</th>
-                        {% endfor %}
-                    </tr>
-                    </thead>
+                <table class="zones-table">
                     <tbody>
+                    <tr class="zone-section">
+                        <th>Configuration de la zone</th>
+                        {% for z in zones %}<th class="section-zone-name"><span class="zone-index">{{ loop.index }}</span><span>{{ z.name }}</span></th>{% endfor %}
+                    </tr>
                     <tr>
                         <th>Type</th>
                         {% for z in zones %}
@@ -142,12 +170,12 @@
                         {% for z in zones %}
                         <td>
                             {% if 'TT SOUDE' in z.type.upper() %}
-                            <label>
-                                <input type="checkbox" name="zone-{{ loop.index0 }}-plots_soudes"
-                                       {% if request.form.get('zone-' ~ loop.index0 ~ '-plots_soudes') %}checked{% endif
-                                %} />
-                                Oui
-                            </label>
+                            {% set plots_value = request.form.get('zone-' ~ loop.index0 ~ '-plots_soudes', 'non_determine') %}
+                            <select name="zone-{{ loop.index0 }}-plots_soudes">
+                                <option value="non_determine" {% if plots_value == 'non_determine' %}selected{% endif %}>Non défini</option>
+                                <option value="oui" {% if plots_value in ('oui', 'on') %}selected{% endif %}>Oui</option>
+                                <option value="non" {% if plots_value == 'non' %}selected{% endif %}>Non</option>
+                            </select>
                             {% else %}
                             <span style="color:#aaa;font-style:italic">N/A</span>
                             {% endif %}
@@ -156,15 +184,64 @@
                     </tr>
                     <tr>
                         <th>Puissance (kWc)</th>
-                        {% for z in zones %}
-                        <td>{{ z.puissance }}</td>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <div class="group">
+                                <input type="number" min="0" step="0.01" inputmode="decimal"
+                                       name="zone-{{ i }}-puissance"
+                                       value="{{ request.form.get('zone-'~i~'-puissance', zones[i].puissance)|replace(',', '.') }}"
+                                       aria-label="Puissance de la zone {{ i + 1 }} en kWc">
+                            </div>
+                        </td>
                         {% endfor %}
                     </tr>
                     <tr>
                         <th>Nb de panneaux</th>
-                        {% for z in zones %}
-                        <td>{{ z.modules }}</td>
+                        {% for i in range(zones|length) %}
+                        <td>
+                            <div class="group">
+                                <input type="number" min="0" step="1" inputmode="numeric"
+                                       name="zone-{{ i }}-modules"
+                                       value="{{ request.form.get('zone-'~i~'-modules', zones[i].modules) }}"
+                                       aria-label="Nombre de panneaux de la zone {{ i + 1 }}">
+                            </div>
+                        </td>
                         {% endfor %}
+                    </tr>
+                    <tr>
+                        <th>Emplacement des onduleurs</th>
+                        {% for i in range(zones|length) %}
+                        {% set location_value = request.form.get('zone-'~i~'-inverter-location', '') %}
+                        <td>
+                            <select name="zone-{{ i }}-inverter-location" class="inverter-location-select">
+                                <option value="" {% if not location_value %}selected{% endif %}>— À définir —</option>
+                                <option value="ombriere_head" {% if location_value == 'ombriere_head' %}selected{% endif %}>En tête de poteau d’ombrière</option>
+                                <option value="roof" {% if location_value in ('roof', 'roof_frame') %}selected{% endif %}>En toiture</option>
+                                <option value="external_facade" {% if location_value == 'external_facade' %}selected{% endif %}>En façade extérieure</option>
+                                <option value="indoor_room" {% if location_value == 'indoor_room' %}selected{% endif %}>Dans un local technique intérieur</option>
+                                <option value="ground_frame" {% if location_value == 'ground_frame' %}selected{% endif %}>Au sol sur châssis ou dalle</option>
+                                <option value="other" {% if location_value == 'other' %}selected{% endif %}>Autre emplacement</option>
+                            </select>
+                            <input type="text" name="zone-{{ i }}-inverter-location-other"
+                                   class="inverter-location-other"
+                                   value="{{ request.form.get('zone-'~i~'-inverter-location-other', '') }}"
+                                   placeholder="Préciser l’emplacement"
+                                   style="display:{{ 'block' if location_value == 'other' else 'none' }};margin-top:8px"/>
+                            {% set roof_frame_value = request.form.get('zone-'~i~'-inverter-roof-frame', 'non_determine') %}
+                            <div class="inverter-roof-frame" style="display:{{ 'block' if location_value in ('roof', 'roof_frame') else 'none' }};margin-top:10px">
+                                <label>Châssis prévu en toiture ?</label>
+                                <select name="zone-{{ i }}-inverter-roof-frame">
+                                    <option value="non_determine" {% if roof_frame_value == 'non_determine' %}selected{% endif %}>À définir</option>
+                                    <option value="oui" {% if roof_frame_value == 'oui' or location_value == 'roof_frame' %}selected{% endif %}>Oui</option>
+                                    <option value="non" {% if roof_frame_value == 'non' %}selected{% endif %}>Non</option>
+                                </select>
+                            </div>
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    <tr class="zone-section">
+                        <th>Équipements photovoltaïques</th>
+                        {% for z in zones %}<th class="section-zone-name"><span class="zone-index">{{ loop.index }}</span><span>{{ z.name }}</span></th>{% endfor %}
                     </tr>
                     <tr>
                     <tr>
@@ -191,7 +268,9 @@
                                     </option>
                                 </select>
                             </div>
-                            <div class="manual-panel-fields" id="manual-fields-{{ i }}" style="margin-top:10px">
+                            <details class="equipment-details">
+                                <summary>Voir / modifier les caractéristiques</summary>
+                                <div class="manual-panel-fields" id="manual-fields-{{ i }}">
                                 {% set mod = module_details[i] if module_details and module_details|length > i else {}
                                 %}
                                 <div class="group"><label>Marque</label><input type="text"
@@ -227,7 +306,8 @@
                                                                                             name="zone-{{ i }}-module-cable"
                                                                                             value="{{ mod.get('Longueur câble mm','') }}"/>
                                 </div>
-
+                                </div>
+                            </details>
                         </td>
                         {% endfor %}
                     </tr>
@@ -248,10 +328,12 @@
                                     Saisie manuelle
                                     </option>
                                 </select>
-                            </div>
+                                </div>
                             {% set inv = inverter_details[i] if inverter_details and inverter_details|length > i else {}
                             %}
-                            <div class="manual-inverter-field" id="manual-inverter-{{ i }}" style="margin-top:10px">
+                            <details class="equipment-details">
+                                <summary>Voir / modifier les caractéristiques</summary>
+                                <div class="manual-inverter-field" id="manual-inverter-{{ i }}">
                                 <div class="group"><label>Marque</label><input type="text"
                                                                                name="zone-{{ i }}-inverter-marque"
                                                                                value="{{ inv.get('Marque','') }}"/>
@@ -299,9 +381,16 @@
                                                                                               name="zone-{{ i }}-inverter-ext-garantie"
                                                                                               value="{{ inv.get('Extension garantie','') }}"/>
                                 </div>
-                            </div>
+                                </div>
+                            </details>
+                            <div class="extra-inverters" data-zone="{{ i }}"></div>
+                            <button type="button" class="add-inverter" data-zone="{{ i }}">+ Ajouter un onduleur</button>
                         </td>
                         {% endfor %}
+                    </tr>
+                    <tr class="zone-section">
+                        <th>Système d’intégration</th>
+                        {% for z in zones %}<th class="section-zone-name"><span class="zone-index">{{ loop.index }}</span><span>{{ z.name }}</span></th>{% endfor %}
                     </tr>
                     <tr>
                         <th>Système d’intégration (SI)</th>
@@ -322,7 +411,9 @@
                                     >Saisie manuelle</option>
                                 </select>
                             </div>
-                            <div class="manual-si-fields" id="manual-si-{{ i }}" style="margin-top:10px">
+                            <details class="equipment-details">
+                                <summary>Voir / modifier les caractéristiques</summary>
+                                <div class="manual-si-fields" id="manual-si-{{ i }}">
                            <div class="group">
     <label>Marque</label>
     <input type="text" name="zone-{{ i }}-si-marque" value="{{ si_details[i].get('Marque','') }}"/>
@@ -363,7 +454,8 @@
     <input type="text" name="zone-{{ i }}-si-garantie" value="{{ si_details[i].get('Garantie','') }}"/>
 </div>
 
-                            </div>
+                                </div>
+                            </details>
                         </td>
                         {% endfor %}
                     </tr>
@@ -371,9 +463,13 @@
                     <tr>
                         <th>Bridage statique</th>
                         {% for i in range(zones|length) %}
+                        {% set static_value = request.form.get('zone-'~i~'-bridage_enabled', 'non_determine') %}
                         <td>
-                            <label><input type="checkbox" name="zone-{{ i }}-bridage_enabled" {% if request.form.get('zone-'~i~'-bridage_enabled')
-                                %}checked{% endif %} /> Oui</label>
+                            <select name="zone-{{ i }}-bridage_enabled">
+                                <option value="non_determine" {% if static_value == 'non_determine' %}selected{% endif %}>Non défini</option>
+                                <option value="oui" {% if static_value in ('oui', 'on') %}selected{% endif %}>Oui</option>
+                                <option value="non" {% if static_value == 'non' %}selected{% endif %}>Non</option>
+                            </select>
                         </td>
                         {% endfor %}
                     </tr>
@@ -387,19 +483,50 @@
                         </td>
                         {% endfor %}
             </div>
-            </tr>
-            <tr>
+                    </tr>
+                    <tr class="zone-section">
+                        <th>Raccordement, protection et supervision</th>
+                        {% for z in zones %}<th class="section-zone-name"><span class="zone-index">{{ loop.index }}</span><span>{{ z.name }}</span></th>{% endfor %}
+                    </tr>
+                    <tr>
                 <th>Bridage dynamique (global)</th>
                 <td colspan="{{ zones|length }}">
-                    <label><input type="checkbox" name="bridage_dyn" {% if request.form.get('bridage_dyn') %}checked{%
-                        endif %} /> Oui</label>
+                    {% set dynamic_value = request.form.get('bridage_dyn', 'non_determine') %}
+                    <select name="bridage_dyn">
+                        <option value="non_determine" {% if dynamic_value == 'non_determine' %}selected{% endif %}>Non défini</option>
+                        <option value="oui" {% if dynamic_value in ('oui', 'on') %}selected{% endif %}>Oui</option>
+                        <option value="non" {% if dynamic_value == 'non' %}selected{% endif %}>Non</option>
+                    </select>
                 </td>
             </tr>
             <tr>
                 <th>Coffret DC</th>
                 {% for i in range(zones|length) %}
-                <td><label><input type="checkbox" name="zone-{{ i }}-coffretDC" {% if request.form.get('zone-'~i~'-coffretDC')
-                    %}checked{% endif %} /> Oui</label></td>
+                {% set coffret_value = request.form.get('zone-'~i~'-coffretDC', 'non_determine') %}
+                <td>
+                    <select name="zone-{{ i }}-coffretDC">
+                        <option value="non_determine" {% if coffret_value == 'non_determine' %}selected{% endif %}>À définir</option>
+                        <option value="oui" {% if coffret_value in ('oui', 'on') %}selected{% endif %}>Oui</option>
+                        <option value="non" {% if coffret_value == 'non' %}selected{% endif %}>Non</option>
+                    </select>
+                    {% set dc_location = request.form.get('zone-'~i~'-coffretDC-location', '') %}
+                    <div class="dc-box-location" style="display:{{ 'block' if coffret_value in ('oui', 'on') else 'none' }};margin-top:8px">
+                        <label>Emplacement du coffret DC</label>
+                        <select name="zone-{{ i }}-coffretDC-location">
+                            <option value="" {% if not dc_location %}selected{% endif %}>Non défini</option>
+                            <option value="ombriere_head" {% if dc_location == 'ombriere_head' %}selected{% endif %}>En tête de poteau d’ombrière</option>
+                            <option value="roof_frame" {% if dc_location == 'roof_frame' %}selected{% endif %}>En toiture sur châssis</option>
+                            <option value="external_facade" {% if dc_location == 'external_facade' %}selected{% endif %}>En façade extérieure</option>
+                            <option value="indoor_room" {% if dc_location == 'indoor_room' %}selected{% endif %}>Dans un local technique</option>
+                            <option value="ground_frame" {% if dc_location == 'ground_frame' %}selected{% endif %}>Au sol sur châssis ou dalle</option>
+                            <option value="other" {% if dc_location == 'other' %}selected{% endif %}>Autre emplacement</option>
+                        </select>
+                        <input type="text" name="zone-{{ i }}-coffretDC-location-other"
+                               value="{{ request.form.get('zone-'~i~'-coffretDC-location-other', '') }}"
+                               placeholder="Préciser l’emplacement"
+                               style="display:{{ 'block' if dc_location == 'other' else 'none' }};margin-top:8px"/>
+                    </div>
+                </td>
                 {% endfor %}
             </tr>
             <tr>
@@ -422,8 +549,14 @@
             <tr>
                 <th>Paratonnerre</th>
                 {% for i in range(zones|length) %}
-                <td><label><input type="checkbox" name="zone-{{ i }}-paratonnerre" {% if request.form.get('zone-'~i~'-paratonnerre')
-                    %}checked{% endif %} /> Oui</label></td>
+                {% set lightning_value = request.form.get('zone-'~i~'-paratonnerre', 'non_determine') %}
+                <td>
+                    <select name="zone-{{ i }}-paratonnerre">
+                        <option value="non_determine" {% if lightning_value == 'non_determine' %}selected{% endif %}>Non défini</option>
+                        <option value="oui" {% if lightning_value in ('oui', 'on') %}selected{% endif %}>Oui</option>
+                        <option value="non" {% if lightning_value == 'non' %}selected{% endif %}>Non</option>
+                    </select>
+                </td>
                 {% endfor %}
             </tr>
             <tr>
@@ -439,8 +572,8 @@
                 </td>
                 {% endfor %}
             </tr>
-            <tr>
-                <th>Type de découplage</th>
+                    <tr>
+                        <th>Type de découplage</th>
                 {% for i in range(zones|length) %}
                 <td>
                     <div class="group">
@@ -455,19 +588,25 @@
                         </select></div>
                 </td>
                 {% endfor %}
-            </tr>
-            <tr>
-                <th>Mode de valorisation</th>
+                    </tr>
+                    <tr class="zone-section">
+                        <th>Exigences et spécificités du projet</th>
+                        {% for z in zones %}<th class="section-zone-name"><span class="zone-index">{{ loop.index }}</span><span>{{ z.name }}</span></th>{% endfor %}
+                    </tr>
+                    <tr>
+                <th>Mode de valorisation
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="Sélection déclarative à vérifier selon les textes et cahiers des charges en vigueur.">i</span>
+                </th>
                 {% for i in range(zones|length) %}
                 <td style="text-align:left">
-                    {% for val,label in [('S21','S21'),('AO CRE','AO CRE (Période de
-                    candidature)'),('Agrégateur','Agrégateur'),('Sans revente','Sans revente')] %}
-                    <label style="display:block; font-weight:normal"><input type="checkbox"
-                                                                            name="zone-{{ i }}-mode_valorisation"
-                                                                            value="{{ val }}" {% if val in
-                                                                            request.form.getlist('zone-'~i~'-mode_valorisation')
-                        %}checked{% endif %} /> {{ label }}</label>
-                    {% endfor %}
+                    {% for value in ['S21','AOS','AO CRE','ACC','Agrégateur','Sans revente'] %}
+                    <label style="display:block; font-weight:normal">
+                        <input type="checkbox" name="zone-{{ i }}-mode_valorisation" value="{{ value }}"
+                               {% if value in request.form.getlist('zone-'~i~'-mode_valorisation') %}checked{% endif %}/>
+                        {{ value }}
+                    </label>
+                        {% endfor %}
                 </td>
                 {% endfor %}
             </tr>
@@ -518,7 +657,9 @@
             </div>
         </section>
         <section class="card">
-            <h3>Lots à inclure</h3>
+            <div class="card-heading">
+                <h3>Lots à sélectionner</h3>
+            </div>
             <div class="grid-2">
                 <label class="chip">
                     <input type="checkbox" name="keep_lot_hta" {% if 'keep_lot_hta' in request.form %}checked{% endif %}
@@ -559,15 +700,99 @@
                     <span class="tip-anchor" tabindex="0"
                           data-tip="À cocher uniquement si le projet inclut des bornes de recharge pour véhicules électriques (IRVE).">i</span>
                 </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_couverture" id="lot-couverture"
+                           {% if 'keep_lot_couverture' in request.form %}checked{% endif %} />
+                    Couverture
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher lorsque le projet comprend des travaux de dépose, de reprise ou de création de couverture.">i</span>
+                </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_desamiantage" id="lot-desamiantage"
+                           {% if 'keep_desamiantage' in request.form %}checked{% endif %} />
+                    Désamiantage
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="Option du lot Couverture, à activer uniquement si le diagnostic amiante impose le retrait de matériaux amiantés.">i</span>
+                </label>
+
+                <label class="chip">
+                    <input type="checkbox" name="keep_lot_renforcement" id="lot-renforcement"
+                           {% if 'keep_lot_renforcement' in request.form %}checked{% endif %} />
+                    Renforcement de structure
+                    <span class="tip-anchor" tabindex="0"
+                          data-tip="À cocher lorsque la structure existante doit être renforcée pour recevoir l’installation photovoltaïque.">i</span>
+                </label>
             </div>
         </section>
 
+        <section class="card" id="structure-photo-block">
+            <div class="card-heading">
+                <h3>Photos du lot Renforcement de structure</h3>
+            </div>
+            <div class="structure-image-grid">
+                {% for photo_key, title in (
+                    ('structure_model', 'Modélisation et vérification de la structure existante'),
+                    ('structure_location', 'Repérage des éléments à renforcer'),
+                    ('structure_reinforcement', 'Principe de renforcement défini par les études d’exécution')
+                ) %}
+                {% set saved_photo = form_values.get(photo_key ~ '_photo_saved', '') %}
+                {% if saved_photo %}<input type="hidden" name="{{ photo_key }}_photo_saved" value="{{ saved_photo }}"/>{% endif %}
+                <div class="group">
+                    <label>{{ title }}</label>
+                    <div class="image-picker" data-image-picker data-single="true"
+                         data-saved-input="{{ photo_key }}_photo_saved">
+                        <input type="file" name="{{ photo_key }}_photo_file" accept="image/*" class="image-file"/>
+                        <div class="image-dropzone" tabindex="0">
+                            <strong>Ajouter la photo correspondante</strong>
+                            <span>une seule image, affichée au-dessus de la légende dans le CCTP</span>
+                        </div>
+                        <div class="image-previews">{% if saved_photo %}<img src="{{ project_image_url(saved_photo) }}" alt="{{ title }}"/>{% endif %}</div>
+                        <button type="button" class="btn btn-ghost image-remove" data-remove-image>Supprimer la photo</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="study-fields">
+                <div class="study-context">
+                    <strong>Emplacement dans le CCTP :</strong>
+                    ces deux textes apparaissent sous « Études d’exécution » du lot Renforcement.
+                    Indiquez uniquement les constats et renforcements propres au projet. La liste générale
+                    des plans, notes de calcul, contrôles et DOE à fournir par l’entreprise vient juste après.
+                </div>
+                <div class="group">
+                    <label for="structure-study-conclusions">1. Que conclut l’étude sur la structure existante ?</label>
+                    <textarea id="structure-study-conclusions" name="structure_study_conclusions" rows="7"
+                              placeholder="Ex. : éléments examinés, capacité à reprendre les charges photovoltaïques, insuffisances ou réserves identifiées par l’étude.">{{ form_values.get('structure_study_conclusions', '') }}</textarea>
+                    <small>Rester factuel : état constaté, vérifications réalisées, résultat et éventuelles réserves.</small>
+                </div>
+                <div class="group">
+                    <label for="structure-study-prescriptions">2. Quels renforcements particuliers faut-il réaliser ?</label>
+                    <textarea id="structure-study-prescriptions" name="structure_study_prescriptions" rows="7"
+                              placeholder="Ex. : éléments concernés, principe de renforcement, localisation et limites d’intervention propres au projet.">{{ form_values.get('structure_study_prescriptions', '') }}</textarea>
+                    <small>Ne pas répéter les études d’exécution et contrôles généraux déjà prévus dans le paragraphe suivant.</small>
+                </div>
+            </div>
+        </section>
 
         {% set charpente_on = ('keep_lot_charpente' in request.form) %}
         <section class="card" id="charpente-block" style="display:{{ 'block' if charpente_on else 'none' }};">
-            <h3>Lot Charpente — Ombrières et Hangars</h3>
+            <div class="card-heading">
+                <h3>Lot Charpente — Ombrières et Hangars</h3>
+            </div>
             <div class="group">
                 <label><input type="checkbox" name="Ombrieres" id="cb-ombrieres" checked/> Présence d’Ombrières</label>
+            </div>
+            <div class="group responsibility-choice" id="ombriere-installation-responsibility">
+                <label for="ombriere_installation_responsibility">Qui pose les systèmes d’intégration et les modules des ombrières ?</label>
+                {% set installation_responsibility = form_values.get('ombriere_installation_responsibility', 'non_determine') %}
+                <select name="ombriere_installation_responsibility" id="ombriere_installation_responsibility">
+                    <option value="non_determine" {% if installation_responsibility == 'non_determine' %}selected{% endif %}>À définir</option>
+                    <option value="titulaire_pv" {% if installation_responsibility == 'titulaire_pv' %}selected{% endif %}>Titulaire photovoltaïque</option>
+                    <option value="lot_charpente" {% if installation_responsibility == 'lot_charpente' %}selected{% endif %}>Lot Charpente</option>
+                </select>
+                <small>Ce choix adapte les paragraphes de pose des systèmes d’intégration et des modules.</small>
             </div>
             <div class="editor" id="ombrieres-editor">
                 <div class="actions">
@@ -616,7 +841,9 @@
             </div>
         </section>
         <section class="card">
-            <h3>VRD — réseaux humides</h3>
+            <div class="card-heading">
+                <h3>VRD — réseaux humides</h3>
+            </div>
             <div class="grid-2">
                 <label class="chip"><input type="checkbox" name="travaux_rh" {% if 'travaux_rh' in request.form
                     %}checked{% endif %} /> Travaux réseaux humides</label>
@@ -624,18 +851,126 @@
                     request.form %}checked{% endif %} /> Ouvrages de rétention des eaux pluviales</label>
             </div>
         </section>
-        <div style="text-align:center; margin:22px 0 10px">
-            <button type="submit" class="btn">Générer le CCTP</button>
+        <div class="form-actions">
+            <button type="submit" formaction="{{ url_for('project_save') }}" class="btn btn-save">Sauvegarder le brouillon</button>
+            <button type="submit" class="btn btn-generate">Générer le CCTP</button>
         </div>
     </form>
 </main>
 
 <script>
+    const financingSelect = document.getElementById('project_financing');
+    const spvNameGroup = document.getElementById('spv-name-group');
+    function syncSpvName(){
+      if (spvNameGroup) spvNameGroup.style.display = financingSelect?.value === 'tiers_investissement' ? '' : 'none';
+    }
+    financingSelect?.addEventListener('change', syncSpvName);
+    syncSpvName();
+
     const lotCharpente = document.getElementById('lot-charpente');   // case "Charpente"
     const charpenteBlk = document.getElementById('charpente-block'); // section complète
-    function syncCharpenteVis(){ charpenteBlk.style.display = lotCharpente.checked ? 'block' : 'none'; }
+    const lotCouverture = document.getElementById('lot-couverture');
+    const lotDesamiantage = document.getElementById('lot-desamiantage');
+    const lotRenforcement = document.getElementById('lot-renforcement');
+    const structurePhotoBlock = document.getElementById('structure-photo-block');
+    const ombriereResponsibility = document.getElementById('ombriere-installation-responsibility');
+    const ombriereCheckbox = document.getElementById('cb-ombrieres');
+    function syncInstallationResponsibility(){
+      if (ombriereResponsibility) {
+        ombriereResponsibility.style.display = lotCharpente?.checked && ombriereCheckbox?.checked ? '' : 'none';
+      }
+    }
+    function syncCharpenteVis(){
+      charpenteBlk.style.display = lotCharpente.checked ? 'block' : 'none';
+      syncInstallationResponsibility();
+    }
     lotCharpente?.addEventListener('change', syncCharpenteVis);
+    ombriereCheckbox?.addEventListener('change', syncInstallationResponsibility);
     syncCharpenteVis(); // état initial au chargement
+    function syncDesamiantage(){
+      if (!lotCouverture || !lotDesamiantage) return;
+      lotDesamiantage.disabled = !lotCouverture.checked;
+      if (!lotCouverture.checked) lotDesamiantage.checked = false;
+    }
+    lotCouverture?.addEventListener('change', syncDesamiantage);
+    syncDesamiantage();
+    function syncStructurePhotos(){
+      if (structurePhotoBlock && lotRenforcement) {
+        structurePhotoBlock.style.display = lotRenforcement.checked ? 'block' : 'none';
+      }
+    }
+    lotRenforcement?.addEventListener('change', syncStructurePhotos);
+    syncStructurePhotos();
+    document.querySelectorAll('.inverter-location-select').forEach(select => {
+      const other = select.parentElement.querySelector('.inverter-location-other');
+      const roofFrame = select.parentElement.querySelector('.inverter-roof-frame');
+      const sync = () => {
+        if (other) other.style.display = select.value === 'other' ? 'block' : 'none';
+        if (roofFrame) roofFrame.style.display = ['roof', 'roof_frame'].includes(select.value) ? 'block' : 'none';
+      };
+      select.addEventListener('change', sync);
+      sync();
+    });
+    document.querySelectorAll('select[name$="-coffretDC"]').forEach(select => {
+      const locationBlock = select.parentElement.querySelector('.dc-box-location');
+      const locationSelect = locationBlock?.querySelector('select');
+      const otherInput = locationBlock?.querySelector('input[type="text"]');
+      const sync = () => {
+        if (locationBlock) locationBlock.style.display = ['oui', 'on'].includes(select.value) ? 'block' : 'none';
+        if (otherInput) otherInput.style.display = locationSelect?.value === 'other' ? 'block' : 'none';
+      };
+      select.addEventListener('change', sync);
+      locationSelect?.addEventListener('change', sync);
+      sync();
+    });
+    document.querySelectorAll('[data-image-picker]').forEach(picker => {
+      const input = picker.querySelector('.image-file');
+      const dropzone = picker.querySelector('.image-dropzone');
+      const previews = picker.querySelector('.image-previews');
+      const removeButton = picker.querySelector('[data-remove-image]');
+      const showFiles = files => {
+        if (picker.dataset.single === 'true') previews.innerHTML = '';
+        [...files].filter(file => file.type.startsWith('image/')).forEach(file => {
+          const image = document.createElement('img');
+          image.src = URL.createObjectURL(file);
+          image.alt = file.name;
+          image.onload = () => URL.revokeObjectURL(image.src);
+          previews.appendChild(image);
+        });
+      };
+      dropzone?.addEventListener('click', () => input.click());
+      dropzone?.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); input.click(); }
+      });
+      input?.addEventListener('change', () => showFiles(input.files));
+      removeButton?.addEventListener('click', () => {
+        input.value = '';
+        previews.innerHTML = '';
+        const savedInputName = picker.dataset.savedInput;
+        if (savedInputName) {
+          picker.closest('section')?.querySelectorAll(`input[name="${savedInputName}"]`)
+            .forEach(hidden => hidden.remove());
+        }
+        removeButton.hidden = true;
+      });
+      if (removeButton) removeButton.hidden = !previews.querySelector('img');
+      input?.addEventListener('change', () => {
+        if (removeButton) removeButton.hidden = !input.files.length && !previews.querySelector('img');
+      });
+      ['dragenter', 'dragover'].forEach(type => dropzone?.addEventListener(type, event => {
+        event.preventDefault(); dropzone.classList.add('is-dragging');
+      }));
+      ['dragleave', 'drop'].forEach(type => dropzone?.addEventListener(type, event => {
+        event.preventDefault(); dropzone.classList.remove('is-dragging');
+      }));
+      dropzone?.addEventListener('drop', event => {
+        const transfer = new DataTransfer();
+        [...event.dataTransfer.files].filter(file => file.type.startsWith('image/')).forEach(file => transfer.items.add(file));
+        input.files = transfer.files;
+        showFiles(input.files);
+      });
+    });
+
     function buildDynamicTable(cfg){
       // Références DOM
       const body   = document.getElementById(cfg.bodyId);
@@ -677,7 +1012,9 @@
       body?.addEventListener('click', (e)=>{
         if(e.target.closest('.btn-del')){ e.target.closest('tr').remove(); renumber(); }
       });
-      addRow();
+      const initialRows = cfg.initialRows || [];
+      if (initialRows.length) initialRows.forEach(addRow);
+      else addRow();
       function syncLocal(){ if(sec && toggle){ sec.style.display = toggle.checked ? '' : 'none'; } }
       toggle?.addEventListener('change', syncLocal); syncLocal();
       (document.querySelector('form[action="/generate"]') || document.querySelector('form'))
@@ -692,10 +1029,12 @@
         });
     }
     buildDynamicTable({
-      key:'omb', bodyId:'omb-body', sectionId:'ombrieres-editor', toggleId:'cb-ombrieres', hiddenId:'omb_table'
+      key:'omb', bodyId:'omb-body', sectionId:'ombrieres-editor', toggleId:'cb-ombrieres', hiddenId:'omb_table',
+      initialRows: {{ saved_omb_table|tojson|safe }}
     });
     buildDynamicTable({
-      key:'hang', bodyId:'hang-body', sectionId:'hangars-editor', toggleId:'cb-hangars', hiddenId:'hang_table'
+      key:'hang', bodyId:'hang-body', sectionId:'hangars-editor', toggleId:'cb-hangars', hiddenId:'hang_table',
+      initialRows: {{ saved_hang_table|tojson|safe }}
     });
 </script>
 <script>
@@ -731,8 +1070,8 @@
         }
 
         function toggleManual() {
-          fields.style.display = 'block'; // Toujours visible
           const val = sel.value;
+          fields.closest('.equipment-details').open = val === '__manual__';
           if (val && val !== '__manual__') updateFieldsFromDB(val);
         }
 
@@ -769,8 +1108,8 @@
         }
 
         function toggleManual() {
-          fields.style.display = 'block'; // Toujours visible
           const val = sel.value;
+          fields.closest('.equipment-details').open = val === '__manual__';
           if (val && val !== '__manual__') updateFieldsFromDB(val);
         }
 
@@ -841,7 +1180,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function onChange() {
-      if (fields) fields.style.display = 'block';  // toujours visible
+      if (fields) fields.closest('.equipment-details').open = sel.value === '__manual__';
       fillFromDB(sel.value);
     }
 
@@ -854,6 +1193,130 @@ document.addEventListener('DOMContentLoaded', function () {
 
 </script>
 
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const inverterOptions = {{ inverter_options|tojson|safe }};
+    const inverterDb = {{ inverter_db|tojson|safe }};
+    const savedRows = {{ extra_inverter_rows|tojson|safe }};
+    const fields = [
+      ['marque', 'Marque', 'Marque'],
+      ['ref', 'Référence', 'Référence'],
+      ['puissance', 'Puissance apparente AC (kVA)', 'Puissance kVA'],
+      ['type', 'Type', 'Type'],
+      ['tension', 'Tension nominale (V)', 'Tension nominale'],
+      ['type-tension', 'Type de tension', 'Type tension'],
+      ['raccord', 'Raccordement DC', 'Raccordement DC'],
+      ['para-dc', 'Parafoudre DC', 'Parafoudre DC'],
+      ['para-ac', 'Parafoudre AC', 'Parafoudre AC'],
+      ['afci', 'Détection d’arc DC (AFCI)', 'AFCI'],
+      ['garantie', 'Garantie produit', 'Garantie'],
+      ['ext-garantie', 'Extension de garantie', 'Extension garantie']
+    ];
+
+    function addInverterRow(zoneIndex, saved = {}) {
+      const container = document.querySelector(`.extra-inverters[data-zone="${zoneIndex}"]`);
+      if (!container) return;
+
+      const row = document.createElement('div');
+      row.className = 'extra-inverter-card';
+
+      const controls = document.createElement('div');
+      controls.className = 'extra-inverter-row';
+
+      const select = document.createElement('select');
+      select.name = `zone-${zoneIndex}-inverter-extra`;
+      select.setAttribute('aria-label', `Onduleur supplémentaire de la zone ${Number(zoneIndex) + 1}`);
+      select.add(new Option('— Sélectionner —', ''));
+      inverterOptions.forEach(option => select.add(new Option(option, option)));
+      select.add(new Option('Saisie manuelle', '__manual__'));
+      select.value = saved.name || '';
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'remove-inverter';
+      remove.textContent = '×';
+      remove.title = 'Supprimer';
+      remove.setAttribute('aria-label', 'Supprimer cet onduleur');
+
+      controls.append(select, remove);
+
+      const details = document.createElement('details');
+      details.className = 'equipment-details extra-inverter-details';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Voir / modifier les caractéristiques';
+      const fieldContainer = document.createElement('div');
+      fieldContainer.className = 'extra-inverter-fields';
+
+      fields.forEach(([suffix, label, dbKey]) => {
+        const group = document.createElement('div');
+        group.className = 'group';
+        const fieldLabel = document.createElement('label');
+        fieldLabel.textContent = label;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.name = `zone-${zoneIndex}-inverter-extra-${suffix}`;
+        input.value = saved[suffix] || '';
+        input.dataset.dbKey = dbKey;
+        group.append(fieldLabel, input);
+        fieldContainer.appendChild(group);
+      });
+      details.append(summary, fieldContainer);
+      row.append(controls, details);
+      container.appendChild(row);
+
+      function fillCharacteristics() {
+        if (select.value === '__manual__') {
+          details.open = true;
+          fieldContainer.querySelectorAll('input').forEach(input => input.value = '');
+          return;
+        }
+        const data = inverterDb[select.value];
+        if (!data) return;
+        fieldContainer.querySelectorAll('input').forEach(input => {
+          input.value = data[input.dataset.dbKey] ?? '';
+        });
+      }
+      select.addEventListener('change', fillCharacteristics);
+      const hasSavedDetails = fields.some(([suffix]) => saved[suffix]);
+      if (select.value && !hasSavedDetails) fillCharacteristics();
+    }
+
+    document.querySelectorAll('.add-inverter').forEach(button => {
+      button.addEventListener('click', () => addInverterRow(button.dataset.zone));
+    });
+    savedRows.forEach((zoneRows, zoneIndex) => {
+      zoneRows.forEach(row => addInverterRow(zoneIndex, row));
+    });
+    document.addEventListener('click', event => {
+      const remove = event.target.closest('.remove-inverter');
+      if (remove) remove.closest('.extra-inverter-card')?.remove();
+    });
+  });
+</script>
+
+<script>
+  // Toggle all details in a row when clicking the row header (Panneau / Onduleur / SI)
+  document.addEventListener('DOMContentLoaded', function(){
+    const targets = ['Panneau','Onduleur','Système d’intégration','Système d integration','Système d’int\u00e9gration (SI)'];
+    document.querySelectorAll('th').forEach(th => {
+      const txt = (th.textContent || '').trim();
+      if (!txt) return;
+      if (targets.some(t => txt.includes(t))) {
+        th.style.cursor = 'pointer';
+        th.title = 'Cliquer pour déplier/plier toutes les caractéristiques de cette ligne';
+        th.addEventListener('click', () => {
+          const tr = th.parentElement;
+          if (!tr) return;
+          // Toggle each details in the row
+          tr.querySelectorAll('td').forEach(td => {
+            const d = td.querySelector('details.equipment-details');
+            if (d) d.open = !d.open;
+          });
+        });
+      }
+    });
+  });
+</script>
 
 </body>
 </html>

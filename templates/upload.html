@@ -2,189 +2,94 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>Auto-générateur de CCTP – Virya Energy</title>
+  <title>Importation du CSV — CCTP photovoltaïque</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
   <link href="https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400;600;700&display=swap" rel="stylesheet">
-
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <style>
-    :root {
-      --orange: #ff5a37;
-      --green: #175649;
-      --text: #175649;
-      --text-light: #555;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      font-family: 'Source Sans Pro', sans-serif;
-      height: 100vh;
-      overflow: hidden;
-      color: var(--text);
-    }
-
-    #bg-video {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-      z-index: -2;
-      filter: brightness(0.7) contrast(1.05);
-    }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background: linear-gradient(
-        rgba(0,0,0,0.35),
-        rgba(0,0,0,0.35)
-      );
-      z-index: -1;
-    }
-
-    .hero {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 40px;
-    }
-
-    .hero-card {
-      position: relative;
-      background: rgba(255, 255, 255, 0.65);
-      border-radius: 16px;
-      padding: 42px 48px;
-      width: 100%;
-      max-width: 520px;
-      text-align: center;
-      border: 1px solid rgba(255,255,255,0.35);
-      box-shadow: 0 25px 50px rgba(0,0,0,0.25);
-    }
-
-    .logo {
-      width: 110px;
-      margin-bottom: 24px;
-    }
-
-    h1 {
-      font-size: 2rem;
-      font-weight: 600;
-      color: var(--orange);
-      margin-bottom: 6px;
-    }
-
-    .subtitle {
-      font-size: 0.9rem;
-      color: var(--text-light);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 32px;
-    }
-
-    input[type="file"] {
-      display: none;
-    }
-
-    .actions {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 14px;
-    }
-
-    .file-info {
-      font-size: 0.85rem;
-      color: #666;
-      font-style: italic;
-    }
-
-    .btn {
-      display: inline-block;
-      min-width: 220px;
-      padding: 0.75rem 1.5rem;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #fff;
-      background: var(--orange);
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      text-align: center;
-      transition: background 0.2s, transform 0.1s;
-    }
-
-    .btn:hover {
-      background: var(--green);
-      transform: translateY(-2px);
-    }
-
-    .btn:active {
-      transform: translateY(1px);
-    }
-
-    .btn-ghost {
-      background: #fff;
-      color: var(--green);
-      border: 1px solid var(--green);
-    }
-
-    @media (max-width: 600px) {
-      .hero-card {
-        padding: 32px 24px;
-      }
-    }
+    .upload-layout{display:grid; grid-template-columns:minmax(0,1fr) minmax(340px,.72fr); gap:18px; align-items:start}
+    .upload-card,.projects-card{margin-top:0}
+    .upload-intro{margin:-4px 0 18px; color:var(--muted); font-size:var(--text-label)}
+    .file-picker{display:flex; align-items:center; gap:12px; min-height:74px; padding:14px; background:var(--green-soft); border:1px dashed #9ebdb5; border-radius:9px}
+    .file-picker input{position:absolute; width:1px; height:1px; opacity:0; pointer-events:none}
+    .file-picker .btn{flex:none}
+    .file-info{min-width:0; color:var(--muted); font-size:var(--text-small); overflow-wrap:anywhere}
+    .upload-actions{display:flex; justify-content:flex-end; margin-top:16px}
+    .project-list{display:grid; gap:8px; max-height:330px; overflow-y:auto}
+    .project{display:flex; align-items:center; gap:10px; padding:11px 12px; background:var(--green-soft); border:1px solid var(--line); border-radius:9px; transition:border-color .15s,background .15s}
+    .project:hover{background:#fff; border-color:#b9d0ca}
+    .project-open{display:flex; align-items:center; justify-content:space-between; gap:12px; flex:1; min-width:0; color:var(--green); text-decoration:none; font-weight:600}
+    .project-open span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+    .project-open small{flex:none; color:var(--muted); font-size:.78rem; font-weight:600}
+    .project-delete{display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; color:#a33; background:transparent; border:0; border-radius:50%; font:600 1.25rem/1 var(--font); cursor:pointer}
+    .project-delete:hover{background:#fff0ed}
+    .empty-state{display:block; padding:18px; color:var(--muted); background:var(--green-soft); border-radius:9px; text-align:center; font-size:var(--text-small)}
+    @media(max-width:850px){.upload-layout{grid-template-columns:1fr}}
+    @media(max-width:640px){.file-picker{align-items:stretch; flex-direction:column}.file-picker .btn,.upload-actions .btn{width:100%}.upload-actions{display:block}}
   </style>
 </head>
-
 <body>
-
-  <video id="bg-video" autoplay muted loop playsinline>
-    <source src="{{ url_for('static', filename='videos/bron_drone.mp4') }}" type="video/mp4">
-  </video>
-
-  <div class="hero">
-    <div class="hero-card">
-
-      <img
-        src="{{ url_for('static', filename='img/virya_logo.svg') }}"
-        alt="Logo Virya"
-        class="logo"
-      >
-
-      <h1>Importation du CSV</h1>
-
-      <form action="/form" method="post" enctype="multipart/form-data">
-        <input type="file" name="csv_file" id="csv_file" accept=".csv">
-
-        <div class="actions">
-          <label for="csv_file" class="btn">Choisir un CSV</label>
-          <span id="file-name" class="file-info">Aucun fichier sélectionné</span>
-          <button type="submit" class="btn">Charger le formulaire</button>
-          <a href="{{ admin_url }}" class="btn btn-ghost" target="_blank" rel="noopener">Admin BDD</a>
+  <main class="container">
+    <header class="app-header">
+      <div class="header-identity">
+        <div class="logo-wrap">
+          <img src="{{ url_for('static', filename='img/virya_logo.svg') }}" alt="Logo Virya" class="logo">
         </div>
-      </form>
+        <div class="header-title">
+          <span class="eyebrow">CCTP photovoltaïque</span>
+          <h1>Importation du CSV</h1>
+        </div>
+      </div>
+      <div class="header-actions">
+        <a href="{{ admin_url }}" class="btn btn-ghost" target="_blank" rel="noopener">Catalogue</a>
+      </div>
+    </header>
 
+    <div class="upload-layout">
+      <section class="card upload-card">
+        <div class="card-heading"><h3>Nouveau projet</h3></div>
+        <p class="upload-intro">Sélectionnez le fichier CSV contenant les informations du projet pour préremplir le formulaire.</p>
+        <form action="/form" method="post" enctype="multipart/form-data">
+          <div class="file-picker">
+            <input type="file" name="csv_file" id="csv_file" accept=".csv" required>
+            <label for="csv_file" class="btn btn-save">Choisir un fichier CSV</label>
+            <span id="file-name" class="file-info">Aucun fichier sélectionné</span>
+          </div>
+          <div class="upload-actions">
+            <button type="submit" class="btn btn-generate">Charger le formulaire</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card projects-card">
+        <div class="card-heading"><h3>Projets en cours</h3></div>
+        <div class="project-list">
+          {% if projects %}
+          {% for project in projects %}
+          <div class="project">
+            <a class="project-open" href="{{ url_for('project_resume', project_id=project.id) }}">
+              <span>{% if project.project_number %}{{ project.project_number }} — {% endif %}{{ project.name or 'Projet sans nom' }}</span>
+              <small>Reprendre</small>
+            </a>
+            <form method="post" action="{{ url_for('project_delete', project_id=project.id) }}" onsubmit="return confirm('Supprimer définitivement ce projet sauvegardé ?');">
+              <button class="project-delete" type="submit" aria-label="Supprimer {{ project.name or 'ce projet' }}" title="Supprimer">×</button>
+            </form>
+          </div>
+          {% endfor %}
+          {% else %}
+          <span class="empty-state">Aucun brouillon sauvegardé.</span>
+          {% endif %}
+        </div>
+      </section>
     </div>
-  </div>
+  </main>
 
   <script>
     const inputFile = document.getElementById('csv_file');
     const fileName = document.getElementById('file-name');
-
     inputFile.addEventListener('change', () => {
-      fileName.textContent = inputFile.files.length
-        ? inputFile.files[0].name
-        : 'Aucun fichier sélectionné';
+      fileName.textContent = inputFile.files.length ? inputFile.files[0].name : 'Aucun fichier sélectionné';
     });
   </script>
-
 </body>
 </html>

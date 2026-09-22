@@ -16,6 +16,7 @@ __pycache__/
 *.sqlite3
 .env
 .env.*
+!.env.example
 admin/database.db
 static/si/
 static/modules/

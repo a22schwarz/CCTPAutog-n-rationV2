@@ -43,14 +43,14 @@ def column_exists(cur, table, column):
 def add_column_if_missing(cur, table, column, coltype):
     if not column_exists(cur, table, column):
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
-        print(f"→ Colonne ajoutée : {table}.{column} ({coltype})")
+        print(f"Column added: {table}.{column} ({coltype})")
 
 
 
 #  TABLE MODULES
 
 def upgrade_modules(cur):
-    print("→ Vérification table MODULES")
+    print("Checking MODULES table")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS modules (
             id INTEGER PRIMARY KEY AUTOINCREMENT
@@ -75,7 +75,7 @@ def upgrade_modules(cur):
 #  TABLE ONDULEURS
 
 def upgrade_onduleurs(cur):
-    print("→ Vérification table ONDULEURS")
+    print("Checking ONDULEURS table")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS onduleurs (
             id INTEGER PRIMARY KEY AUTOINCREMENT
@@ -101,7 +101,7 @@ def upgrade_onduleurs(cur):
 #  TABLE INTEGRATIONS
 
 def upgrade_integrations(cur):
-    print("→ Vérification table INTEGRATIONS")
+    print("Checking INTEGRATIONS table")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS integrations (
             id INTEGER PRIMARY KEY AUTOINCREMENT
@@ -130,13 +130,27 @@ def upgrade_integrations(cur):
 #  TABLE INTEGRATIONS_CARACTERISTIQUES
 
 def upgrade_integrations_caracteristiques(cur):
-    print("→ Vérification table INTEGRATIONS_CARACTERISTIQUES")
+    print("Checking INTEGRATIONS_CARACTERISTIQUES table")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS integrations_caracteristiques (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             integration_id INTEGER NOT NULL,
             texte TEXT NOT NULL,
             FOREIGN KEY(integration_id) REFERENCES integrations(id)
+        );
+    """)
+
+
+def upgrade_projects(cur):
+    """Brouillons de CCTP sauvegardés depuis le formulaire Flask."""
+    print("Checking PROJECTS table")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL DEFAULT 'Projet sans nom',
+            form_data TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
     """)
 
@@ -188,6 +202,7 @@ def ensure_db():
     upgrade_onduleurs(cur)
     upgrade_integrations(cur)
     upgrade_integrations_caracteristiques(cur)
+    upgrade_projects(cur)
 
     conn.commit()
     conn.close()
