@@ -17,6 +17,17 @@ class ProjectStorageTests(unittest.TestCase):
         app_module.app.config.update(TESTING=True)
         self.client = app_module.app.test_client()
 
+    def test_supabase_legacy_jwt_is_used_as_bearer_token(self):
+        with patch.object(app_module, "SUPABASE_KEY", "eyJlegacy-service-role"):
+            headers = app_module._sb_headers()
+        self.assertEqual(headers["apikey"], "eyJlegacy-service-role")
+        self.assertEqual(headers["Authorization"], "Bearer eyJlegacy-service-role")
+
+    def test_supabase_secret_key_is_not_used_as_bearer_token(self):
+        with patch.object(app_module, "SUPABASE_KEY", "sb_secret_example"):
+            headers = app_module._sb_headers()
+        self.assertEqual(headers, {"apikey": "sb_secret_example"})
+
     @patch.object(app_module, "query")
     def test_list_projects_uses_sqlite_locally(self, query):
         query.return_value = [{"id": 1, "name": "Local", "form_data": "{}"}]

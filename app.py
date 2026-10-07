@@ -66,10 +66,14 @@ INVERTER_FORM_FIELDS = {
 # Supabase uniquement: pas d'initialisation SQLite.
 
 def _sb_headers():
-    return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-    }
+    headers = {"apikey": SUPABASE_KEY}
+    # Les anciennes cles service_role sont des JWT et peuvent etre envoyees
+    # comme jeton Bearer. Les nouvelles cles ``sb_secret_...`` ne sont pas des
+    # JWT : les placer dans Authorization provoque alors "Invalid JWT". Dans
+    # ce cas, l'en-tete apikey suffit et Supabase lui associe le role serveur.
+    if SUPABASE_KEY.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {SUPABASE_KEY}"
+    return headers
 
 def _sb_select(table, filters=None, order=None):
     if not USE_SUPABASE:
