@@ -28,6 +28,16 @@ class ProjectStorageTests(unittest.TestCase):
             headers = app_module._sb_headers()
         self.assertEqual(headers, {"apikey": "sb_secret_example"})
 
+    def test_saved_csv_round_trip_preserves_semicolons(self):
+        original = 'Projet;"Texte avec ; point-virgule";Fin\nA;;C\n'
+        parsed = app_module.parse_csv(original, from_text=True)
+        restored = app_module.parse_csv(
+            app_module.serialize_csv(parsed),
+            from_text=True,
+        )
+        self.assertTrue(parsed.equals(restored))
+        self.assertEqual(restored.iloc[0, 1], "Texte avec ; point-virgule")
+
     @patch.object(app_module, "query")
     def test_list_projects_uses_sqlite_locally(self, query):
         query.return_value = [{"id": 1, "name": "Local", "form_data": "{}"}]

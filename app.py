@@ -513,6 +513,18 @@ def parse_csv(src, from_text=False):
 
 
 # Cette fonction sert a chercher la premiere valeur qui se trouve juste apres un mot cle donné (alias) dans le CSV. Elle verifie chaque ligne et chaque colonne, compare en ignorant les majuscules/minuscules et les espaces, et renvoie la valeur de la cellule suivante si ca correspond.
+def serialize_csv(df):
+    """Serialise le CSV sans casser les valeurs contenant un point-virgule."""
+    if df.empty:
+        return ''
+    return df.to_csv(
+        index=False,
+        header=False,
+        sep=app.config['CSV_SEP'],
+        lineterminator='\n',
+    )
+
+
 def find_first(df, aliases):
     if df.empty: return ''  # si le tableau est vide on renvoie vide
     if isinstance(aliases, str): aliases = [aliases]  # si un seul alias est donné on le met dans une liste
@@ -987,7 +999,7 @@ def form(saved_project=None):
     csv_data['abattagearbres'] = '1' if nb_arb > 0 else '0'
     ctx = {
         # Construit le contexte envoyé au template formulaire.html ; il préremplit l’interface et transporte les données jusqu’à generate pour produire le Word
-        'csv_text': ("\n".join(df.astype(str).agg(';'.join, axis=1))) if not df.empty else '',
+        'csv_text': serialize_csv(df),
         'csv_filename': form_values.get('csv_filename', '') if saved_project else (f.filename if f else ''),
         # Version texte du CSV (séparateur ;)
         'zones': zones,
